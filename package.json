@@ -1,0 +1,23 @@
+{
+  "name": "ccmobile",
+  "version": "1.0.0",
+  "description": "Claude Code in your browser — a self-hosted web UI for Claude Code CLI",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "vibe-coding",
+    "ai",
+    "web-ui"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "adm-zip": "^0.5.17",
+    "better-sqlite3": "^12.10.0",
+    "express": "^4.22.2",
+    "multer": "^1.4.4"
+  }
+}
