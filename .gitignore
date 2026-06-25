@@ -1,3 +1,8 @@
 node_modules/
 .env
 data/
+
+# Runtime user & project data
+user-data/
+projects/
+shared-projects/

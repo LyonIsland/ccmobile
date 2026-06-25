@@ -7,6 +7,7 @@ const readline = require('readline');
 const multer = require('multer');
 const AdmZip = require('adm-zip');
 const Database = require('better-sqlite3');
+const bcrypt = require('bcryptjs');
 const config = require('./config');
 
 process.on('uncaughtException', (err) => { console.error('[UNCAUGHT]', err.stack || err); });
@@ -20,7 +21,181 @@ app.use(express.json({ limit: '20mb' }));
 
 const upload = multer({ dest: '/tmp/ccmobile-uploads/', limits: { fileSize: 300 * 1024 * 1024 }, defParamCharset: 'utf8' });
 
-// Check if Claude Code CLI is authenticated
+// ========== Constants ==========
+const HOME_DIR = config.HOME_DIR;
+const USER_DATA_ROOT = config.USER_DATA_ROOT;
+const SHARED_PROJECTS_ROOT = config.SHARED_PROJECTS_ROOT;
+const CLAUDE_SESSIONS_ROOT = config.CLAUDE_SESSIONS_ROOT;
+const FILE_HISTORY_ROOT = config.FILE_HISTORY_ROOT;
+const activeSessions = new Map();
+const authTokens = new Map(); // token -> { user: {id, username, role}, expiresAt }
+
+// ========== Database Setup ==========
+const DB_PATH = path.join(__dirname, 'data', 'ccmobile.db');
+if (!fs.existsSync(path.join(__dirname, 'data'))) fs.mkdirSync(path.join(__dirname, 'data'));
+const db = new Database(DB_PATH);
+db.pragma('journal_mode = WAL');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user',
+    created_at TEXT NOT NULL,
+    last_login TEXT
+  );
+  CREATE TABLE IF NOT EXISTS shared_projects (
+    id TEXT PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL,
+    description TEXT DEFAULT '',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS project_access (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    requested_at TEXT NOT NULL,
+    reviewed_at TEXT,
+    reviewed_by TEXT,
+    UNIQUE(project_id, user_id)
+  );
+  CREATE TABLE IF NOT EXISTS session_names (
+    session_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    user_id TEXT
+  );
+  CREATE TABLE IF NOT EXISTS project_notes (
+    id TEXT PRIMARY KEY,
+    project TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    user_id TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_notes_project ON project_notes(project);
+  CREATE INDEX IF NOT EXISTS idx_access_project ON project_access(project_id);
+  CREATE INDEX IF NOT EXISTS idx_access_user ON project_access(user_id);
+`);
+
+// Add user_id columns if not exist (migration for existing DBs)
+try { db.exec(`ALTER TABLE session_names ADD COLUMN user_id TEXT`); } catch {}
+try { db.exec(`ALTER TABLE project_notes ADD COLUMN user_id TEXT`); } catch {}
+try { db.exec(`ALTER TABLE users ADD COLUMN has_onboarded INTEGER DEFAULT 0`); } catch {}
+
+// Logging tables
+db.exec(`
+  CREATE TABLE IF NOT EXISTS system_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    level TEXT NOT NULL DEFAULT 'info',
+    event TEXT NOT NULL,
+    user_id TEXT,
+    username TEXT,
+    detail TEXT
+  );
+  CREATE TABLE IF NOT EXISTS chat_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    username TEXT NOT NULL,
+    project TEXT NOT NULL,
+    project_type TEXT DEFAULT 'personal',
+    session_id TEXT,
+    message_preview TEXT,
+    input_tokens INTEGER DEFAULT 0,
+    output_tokens INTEGER DEFAULT 0,
+    cache_read_tokens INTEGER DEFAULT 0,
+    cost_usd REAL DEFAULT 0,
+    duration_ms INTEGER DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS idx_syslog_time ON system_logs(timestamp);
+  CREATE INDEX IF NOT EXISTS idx_syslog_user ON system_logs(user_id);
+  CREATE INDEX IF NOT EXISTS idx_chatlog_time ON chat_logs(timestamp);
+  CREATE INDEX IF NOT EXISTS idx_chatlog_user ON chat_logs(user_id);
+`);
+
+// ========== Logging Helpers ==========
+function logSystem(event, userId, username, detail) {
+  db.prepare('INSERT INTO system_logs (timestamp, level, event, user_id, username, detail) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(new Date().toISOString(), 'info', event, userId || null, username || null, detail || null);
+}
+
+function logChat(userId, username, project, projectType, sessionId, messagePreview, usage) {
+  db.prepare('INSERT INTO chat_logs (timestamp, user_id, username, project, project_type, session_id, message_preview, input_tokens, output_tokens, cache_read_tokens, cost_usd, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(new Date().toISOString(), userId, username, project, projectType || 'personal', sessionId || null, (messagePreview || '').substring(0, 200), usage.inputTokens || 0, usage.outputTokens || 0, usage.cacheReadTokens || 0, usage.costUsd || 0, usage.durationMs || 0);
+}
+
+// ========== Initial Admin Setup ==========
+function ensureAdminUser() {
+  const userCount = db.prepare('SELECT COUNT(*) as cnt FROM users').get().cnt;
+  if (userCount === 0 && config.ADMIN_USER && config.ADMIN_PASS) {
+    const id = crypto.randomUUID();
+    const hash = bcrypt.hashSync(config.ADMIN_PASS, 10);
+    db.prepare('INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(id, config.ADMIN_USER, hash, 'admin', new Date().toISOString());
+    console.log(`  [init] Admin user "${config.ADMIN_USER}" created`);
+  }
+}
+
+// ========== Ensure directories ==========
+function ensureDirs() {
+  if (!fs.existsSync(USER_DATA_ROOT)) fs.mkdirSync(USER_DATA_ROOT, { recursive: true });
+  if (!fs.existsSync(SHARED_PROJECTS_ROOT)) fs.mkdirSync(SHARED_PROJECTS_ROOT, { recursive: true });
+}
+
+// ========== Auth Helpers ==========
+function generateToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function validateToken(token) {
+  const session = authTokens.get(token);
+  if (!session) return null;
+  if (Date.now() > session.expiresAt) {
+    authTokens.delete(token);
+    return null;
+  }
+  // Refresh expiry on each use
+  session.expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000;
+  return session.user;
+}
+
+// ========== User Data Helpers ==========
+function getUserHome(username) {
+  return path.join(USER_DATA_ROOT, username);
+}
+
+function getUserProjectsDir(username) {
+  return path.join(USER_DATA_ROOT, username, 'projects');
+}
+
+function getUserClaudeDir(username) {
+  return path.join(USER_DATA_ROOT, username, '.claude');
+}
+
+function ensureUserDirs(username) {
+  const home = getUserHome(username);
+  const dirs = [
+    path.join(home, 'projects'),
+    path.join(home, '.claude'),
+    path.join(home, '.claude', 'projects'),
+    path.join(home, '.claude', 'file-history'),
+  ];
+  for (const d of dirs) {
+    if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+  }
+  // Copy global Claude credentials if user doesn't have their own
+  const globalCred = path.join(HOME_DIR, '.claude', '.credentials.json');
+  const userCred = path.join(home, '.claude', '.credentials.json');
+  if (fs.existsSync(globalCred) && !fs.existsSync(userCred)) {
+    fs.copyFileSync(globalCred, userCred);
+  }
+}
+
+// ========== Check if Claude CLI is authenticated ==========
 function isClaudeAuthed() {
   try {
     const credPath = path.join(HOME_DIR, '.claude', '.credentials.json');
@@ -30,98 +205,109 @@ function isClaudeAuthed() {
   } catch { return false; }
 }
 
-// Setup API — accessible without auth, mounted at /setup (outside /api)
+// ========== Setup API (no auth required) ==========
 app.get('/setup/status', (req, res) => {
-  let projectCount = 0;
-  if (fs.existsSync(config.PROJECT_ROOT)) {
-    projectCount = fs.readdirSync(config.PROJECT_ROOT, { withFileTypes: true }).filter(d => d.isDirectory() && !d.name.startsWith('.')).length;
-  }
   const claudeCliFound = fs.existsSync(config.CLAUDE_CLI_PATH);
   const claudeAuthed = claudeCliFound && isClaudeAuthed();
+  const userCount = db.prepare('SELECT COUNT(*) as cnt FROM users').get().cnt;
   res.json({
-    configured: config.HAS_ENV && projectCount > 0 && claudeAuthed,
-    projectRoot: config.PROJECT_ROOT,
+    configured: config.HAS_ENV && claudeAuthed && userCount > 0,
     claudeCli: config.CLAUDE_CLI_PATH,
     claudeCliFound,
     claudeAuthed,
     sandbox: config.USE_SANDBOX,
-    projectCount
+    userCount
   });
 });
 
-app.post('/setup/save', express.json(), (req, res) => {
-  const { projectRoot } = req.body;
-  if (!projectRoot || !projectRoot.trim()) return res.status(400).json({ error: 'Project root is required' });
-  const root = projectRoot.trim();
-  if (!fs.existsSync(root)) {
-    try { fs.mkdirSync(root, { recursive: true }); } catch (e) { return res.status(400).json({ error: `Cannot create directory: ${e.message}` }); }
+// ========== Auth API (no token required) ==========
+app.post('/api/auth/login', (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+
+  const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+  if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+    return res.status(401).json({ error: 'Invalid username or password' });
   }
-  const lines = [`# ccmobile Configuration (generated by setup wizard)`, `CCMOBILE_PROJECT_ROOT=${root}`];
-  try {
-    fs.writeFileSync(config.ENV_PATH, lines.join('\n') + '\n');
-    res.json({ ok: true, note: 'Configuration saved. Please restart the server for changes to take effect.' });
-  } catch (e) {
-    res.status(500).json({ error: `Failed to write .env: ${e.message}` });
-  }
+
+  // Update last_login
+  db.prepare('UPDATE users SET last_login = ? WHERE id = ?').run(new Date().toISOString(), user.id);
+
+  // Ensure user directories
+  ensureUserDirs(username);
+
+  // Generate token
+  const token = generateToken();
+  authTokens.set(token, {
+    user: { id: user.id, username: user.username, role: user.role },
+    expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000
+  });
+
+  res.json({ ok: true, token, user: { id: user.id, username: user.username, role: user.role, hasOnboarded: !!user.has_onboarded } });
+  logSystem('login', user.id, user.username, `Login successful (role: ${user.role})`);
 });
 
-// Auth: if ACCESS_KEY is set, require it; otherwise allow all requests
-app.post('/api/auth', (req, res) => {
-  if (!config.ACCESS_KEY) return res.json({ ok: true });
-  const { key } = req.body;
-  if (key === config.ACCESS_KEY) return res.json({ ok: true });
-  res.status(401).json({ error: 'Invalid access key' });
-});
-
+// ========== Auth Middleware ==========
 app.use('/api', (req, res, next) => {
-  if (!config.ACCESS_KEY) return next();
-  if (req.headers['authorization'] === config.ACCESS_KEY) return next();
-  res.status(401).json({ error: 'Unauthorized' });
+  // Allow login endpoint without token
+  if (req.path === '/auth/login') return next();
+
+  const authHeader = req.headers['authorization'] || '';
+  const token = authHeader.replace('Bearer ', '');
+  const user = validateToken(token);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  req.user = user;
+  next();
 });
 
+// ========== Auth endpoints (token required) ==========
+app.post('/api/auth/logout', (req, res) => {
+  const token = (req.headers['authorization'] || '').replace('Bearer ', '');
+  authTokens.delete(token);
+  logSystem('logout', req.user.id, req.user.username, null);
+  res.json({ ok: true });
+});
+
+app.get('/api/auth/me', (req, res) => {
+  const user = db.prepare('SELECT has_onboarded FROM users WHERE id = ?').get(req.user.id);
+  res.json({ user: { ...req.user, hasOnboarded: !!(user && user.has_onboarded) } });
+});
+
+app.post('/api/auth/complete-onboarding', (req, res) => {
+  db.prepare('UPDATE users SET has_onboarded = 1 WHERE id = ?').run(req.user.id);
+  res.json({ ok: true });
+});
+
+app.post('/api/auth/change-password', (req, res) => {
+  const { oldPassword, newPassword } = req.body;
+  if (!oldPassword || !newPassword) return res.status(400).json({ error: 'Both old and new password required' });
+  if (newPassword.length < 4) return res.status(400).json({ error: 'Password too short (min 4 chars)' });
+
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  if (!bcrypt.compareSync(oldPassword, user.password_hash)) {
+    return res.status(401).json({ error: 'Current password is incorrect' });
+  }
+
+  const hash = bcrypt.hashSync(newPassword, 10);
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, req.user.id);
+  res.json({ ok: true });
+});
+
+// ========== Admin Middleware ==========
+function requireAdmin(req, res, next) {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin required' });
+  next();
+}
+
+// ========== Static Files ==========
 app.use(express.static('application/public'));
 
-const PROJECT_ROOT = config.PROJECT_ROOT;
-const HOME_DIR = config.HOME_DIR;
-const CLAUDE_SESSIONS_ROOT = config.CLAUDE_SESSIONS_ROOT;
-const FILE_HISTORY_ROOT = config.FILE_HISTORY_ROOT;
-const activeSessions = new Map();
+// ========== Helper Functions ==========
 
-// SQLite database (minimal — only session names and project notes)
-const DB_PATH = path.join(__dirname, 'data', 'ccmobile.db');
-if (!fs.existsSync(path.join(__dirname, 'data'))) fs.mkdirSync(path.join(__dirname, 'data'));
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS session_names (
-    session_id TEXT PRIMARY KEY,
-    name TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS project_notes (
-    id TEXT PRIMARY KEY,
-    project TEXT NOT NULL,
-    content TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS idx_notes_project ON project_notes(project);
-`);
-
-// Auto-cleanup stale sessions (no activity for 2 hours)
-setInterval(() => {
-  const cutoff = Date.now() - 2 * 60 * 60 * 1000;
-  for (const [id, s] of activeSessions) {
-    if ((s.lastActive || 0) < cutoff) activeSessions.delete(id);
-  }
-}, 10 * 60 * 1000);
-
-// Convert project path to claude sessions dir name
 function projectToSessionDir(projectPath) {
   return projectPath.replace(/\//g, '-').replace(/^-/, '-');
 }
 
-// Find CLAUDE.md with case-insensitive match
 function findClaudeMd(dir) {
   try {
     const f = fs.readdirSync(dir).find(n => n.toLowerCase() === 'claude.md');
@@ -129,24 +315,29 @@ function findClaudeMd(dir) {
   } catch { return null; }
 }
 
-// Build project info object
-function buildProjectInfo(fullPath, name) {
+function buildProjectInfo(fullPath, name, type) {
   const sessionDir = path.join(CLAUDE_SESSIONS_ROOT, projectToSessionDir(fullPath));
   let sessionCount = 0;
   if (fs.existsSync(sessionDir)) {
     sessionCount = fs.readdirSync(sessionDir).filter(f => f.endsWith('.jsonl')).length;
   }
   return {
-    name, path: fullPath,
+    name, path: fullPath, type,
     hasGit: fs.existsSync(path.join(fullPath, '.git')) && (() => { try { execSync('git remote get-url origin', { cwd: fullPath, stdio: 'ignore' }); return true; } catch { return false; } })(),
     hasClaudeMd: !!findClaudeMd(fullPath),
     sessionCount
   };
 }
 
-// Build bwrap sandbox args for a project directory
-function buildSandboxArgs(projectDir, claudeArgs) {
-  return [
+// Build bwrap sandbox args for a user + project
+function buildUserSandboxArgs(username, projectDir, claudeArgs) {
+  const userHome = getUserHome(username);
+  const userClaudeDir = getUserClaudeDir(username);
+
+  // Ensure required user directories exist
+  ensureUserDirs(username);
+
+  const args = [
     '--ro-bind', '/usr', '/usr',
     '--ro-bind', '/lib', '/lib',
     '--ro-bind', '/lib64', '/lib64',
@@ -158,15 +349,26 @@ function buildSandboxArgs(projectDir, claudeArgs) {
     '--proc', '/proc',
     '--bind', '/tmp', '/tmp',
     '--bind', projectDir, projectDir,
-    '--bind', HOME_DIR + '/.claude', HOME_DIR + '/.claude',
-    '--bind', HOME_DIR + '/.claude.json', HOME_DIR + '/.claude.json',
-    '--ro-bind', HOME_DIR + '/.npm', HOME_DIR + '/.npm',
-    '--ro-bind', HOME_DIR + '/.config', HOME_DIR + '/.config',
-    '--ro-bind', HOME_DIR + '/.local', HOME_DIR + '/.local',
+    '--bind', userClaudeDir, userClaudeDir,
     '--chdir', projectDir,
     '--share-net',
     config.CLAUDE_CLI_PATH, ...claudeArgs
   ];
+  return args;
+}
+
+// Resolve project path for a user (personal or shared)
+function resolveUserProjectPath(username, projectName, projectType) {
+  if (projectType === 'shared') {
+    return path.join(SHARED_PROJECTS_ROOT, projectName);
+  }
+  return path.join(getUserProjectsDir(username), projectName);
+}
+
+// Check if user has access to a shared project
+function userHasSharedAccess(userId, projectId) {
+  const access = db.prepare('SELECT status FROM project_access WHERE user_id = ? AND project_id = ? AND status = ?').get(userId, projectId, 'approved');
+  return !!access;
 }
 
 // Parse JSONL session file
@@ -212,31 +414,109 @@ function parseSessionJSONL(filePath) {
   });
 }
 
-// Resolve project name to full path
-function resolveProjectPath(projectName) {
-  return path.join(PROJECT_ROOT, projectName);
-}
+// ========== Projects API ==========
 
-// List all project directories
+// List user's projects (personal + authorized shared)
 app.get('/api/projects', (req, res) => {
-  if (!fs.existsSync(PROJECT_ROOT)) return res.json({ projects: [] });
-  const dirs = fs.readdirSync(PROJECT_ROOT, { withFileTypes: true })
-    .filter(d => d.isDirectory() && !d.name.startsWith('.'))
-    .map(d => buildProjectInfo(path.join(PROJECT_ROOT, d.name), d.name));
-  res.json({ projects: dirs });
+  const { username, id: userId } = req.user;
+  const projects = [];
+
+  // Personal projects
+  const personalDir = getUserProjectsDir(username);
+  if (fs.existsSync(personalDir)) {
+    const dirs = fs.readdirSync(personalDir, { withFileTypes: true })
+      .filter(d => d.isDirectory() && !d.name.startsWith('.'));
+    for (const d of dirs) {
+      projects.push(buildProjectInfo(path.join(personalDir, d.name), d.name, 'personal'));
+    }
+  }
+
+  // Shared projects (approved access or admin)
+  const sharedProjects = db.prepare('SELECT * FROM shared_projects').all();
+  for (const sp of sharedProjects) {
+    const hasAccess = req.user.role === 'admin' || userHasSharedAccess(userId, sp.id);
+    if (hasAccess) {
+      const spPath = path.join(SHARED_PROJECTS_ROOT, sp.name);
+      if (fs.existsSync(spPath)) {
+        projects.push({ ...buildProjectInfo(spPath, sp.name, 'shared'), description: sp.description });
+      }
+    }
+  }
+
+  res.json({ projects });
 });
 
-// Read CLAUDE.md for a project
+// Create a personal project
+app.post('/api/projects/create', (req, res) => {
+  const { name } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Project name required' });
+  const projName = name.trim().replace(/[^a-zA-Z0-9_\-\.]/g, '-');
+  if (!projName) return res.status(400).json({ error: 'Invalid project name' });
+
+  const userProjDir = getUserProjectsDir(req.user.username);
+  const projPath = path.join(userProjDir, projName);
+  if (fs.existsSync(projPath)) return res.status(409).json({ error: 'Project already exists' });
+
+  fs.mkdirSync(projPath, { recursive: true });
+  logSystem('create_project', req.user.id, req.user.username, `Created personal project "${projName}"`);
+  res.json({ ok: true, name: projName, type: 'personal' });
+});
+
+// Create a shared project (by any user, with user sharing list)
+app.post('/api/projects/create-shared', (req, res) => {
+  const { name, description, sharedWith } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Project name required' });
+  const projName = name.trim().replace(/[^a-zA-Z0-9_\-\.]/g, '-');
+  if (!projName) return res.status(400).json({ error: 'Invalid project name' });
+
+  const existing = db.prepare('SELECT id FROM shared_projects WHERE name = ?').get(projName);
+  if (existing) return res.status(409).json({ error: 'Shared project name already exists' });
+
+  // Create directory
+  const projPath = path.join(SHARED_PROJECTS_ROOT, projName);
+  if (!fs.existsSync(projPath)) fs.mkdirSync(projPath, { recursive: true });
+
+  const id = crypto.randomUUID();
+  db.prepare('INSERT INTO shared_projects (id, name, description, created_by, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(id, projName, description || '', req.user.id, new Date().toISOString());
+
+  // Auto-approve creator
+  const accessId = crypto.randomUUID();
+  db.prepare('INSERT INTO project_access (id, project_id, user_id, status, requested_at, reviewed_at, reviewed_by) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(accessId, id, req.user.id, 'approved', new Date().toISOString(), new Date().toISOString(), req.user.id);
+
+  // Share with selected users (auto-approve)
+  if (Array.isArray(sharedWith) && sharedWith.length > 0) {
+    for (const userId of sharedWith) {
+      if (userId === req.user.id) continue;
+      const user = db.prepare('SELECT id FROM users WHERE id = ?').get(userId);
+      if (!user) continue;
+      const aid = crypto.randomUUID();
+      db.prepare('INSERT OR IGNORE INTO project_access (id, project_id, user_id, status, requested_at, reviewed_at, reviewed_by) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(aid, id, userId, 'approved', new Date().toISOString(), new Date().toISOString(), req.user.id);
+    }
+  }
+
+  logSystem('create_shared_project', req.user.id, req.user.username, `Created shared project "${projName}" (shared with ${(sharedWith || []).length} users)`);
+  res.json({ ok: true, name: projName, type: 'shared', id });
+});
+
+// Get user list for sharing (all users except self)
+app.get('/api/users/list', (req, res) => {
+  const users = db.prepare('SELECT id, username, role FROM users WHERE id != ? ORDER BY username').all(req.user.id);
+  res.json(users);
+});
+
+// ========== CLAUDE.md ==========
 app.get('/api/projects/:name/claude-md', (req, res) => {
-  const projectPath = resolveProjectPath(req.params.name);
+  const projectPath = resolveUserProjectPath(req.user.username, req.params.name, req.query.type || 'personal');
   const mdPath = findClaudeMd(projectPath);
   if (!mdPath) return res.json({ exists: false, content: '' });
   res.json({ exists: true, content: fs.readFileSync(mdPath, 'utf8') });
 });
 
-// Write CLAUDE.md for a project
 app.put('/api/projects/:name/claude-md', (req, res) => {
-  const projectPath = resolveProjectPath(req.params.name);
+  const projectPath = resolveUserProjectPath(req.user.username, req.params.name, req.query.type || 'personal');
   const mdPath = findClaudeMd(projectPath) || path.join(projectPath, 'CLAUDE.md');
   try {
     fs.writeFileSync(mdPath, req.body.content || '');
@@ -246,9 +526,9 @@ app.put('/api/projects/:name/claude-md', (req, res) => {
   }
 });
 
-// List sessions for a project
+// ========== Sessions API ==========
 app.get('/api/projects/:name/sessions', async (req, res) => {
-  const projectPath = resolveProjectPath(req.params.name);
+  const projectPath = resolveUserProjectPath(req.user.username, req.params.name, req.query.type || 'personal');
   const sessionDir = path.join(CLAUDE_SESSIONS_ROOT, projectToSessionDir(projectPath));
   if (!fs.existsSync(sessionDir)) return res.json([]);
 
@@ -284,18 +564,17 @@ app.get('/api/projects/:name/sessions', async (req, res) => {
   res.json(sessions);
 });
 
-// Rename a session
 app.put('/api/sessions/:sessionId/name', (req, res) => {
   const { sessionId } = req.params;
-  const { name, project } = req.body;
+  const { name, project, type } = req.body;
   const trimmed = (name || '').trim();
   if (!trimmed) {
     db.prepare('DELETE FROM session_names WHERE session_id = ?').run(sessionId);
   } else {
-    db.prepare('INSERT OR REPLACE INTO session_names (session_id, name) VALUES (?, ?)').run(sessionId, trimmed);
+    db.prepare('INSERT OR REPLACE INTO session_names (session_id, name, user_id) VALUES (?, ?, ?)').run(sessionId, trimmed, req.user.id);
   }
   if (project) {
-    const projectPath = resolveProjectPath(project);
+    const projectPath = resolveUserProjectPath(req.user.username, project, type || 'personal');
     const sessionDir = path.join(CLAUDE_SESSIONS_ROOT, projectToSessionDir(projectPath));
     const jsonlPath = path.join(sessionDir, `${sessionId}.jsonl`);
     if (fs.existsSync(jsonlPath)) {
@@ -306,16 +585,16 @@ app.put('/api/sessions/:sessionId/name', (req, res) => {
   res.json({ ok: true });
 });
 
-// Get session messages (paginated)
 app.get('/api/sessions/:sessionId/messages', async (req, res) => {
   const { sessionId } = req.params;
   const projectName = req.query.project;
+  const projectType = req.query.type || 'personal';
   if (!projectName) return res.status(400).json({ error: 'project query param required' });
 
   const limit = Math.min(parseInt(req.query.limit) || 50, 200);
   const before = req.query.before != null ? parseInt(req.query.before) : null;
 
-  const projectPath = resolveProjectPath(projectName);
+  const projectPath = resolveUserProjectPath(req.user.username, projectName, projectType);
   const sessionDir = path.join(CLAUDE_SESSIONS_ROOT, projectToSessionDir(projectPath));
   const filePath = path.join(sessionDir, `${sessionId}.jsonl`);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Session not found' });
@@ -330,30 +609,32 @@ app.get('/api/sessions/:sessionId/messages', async (req, res) => {
 
 // Create a new chat session
 app.post('/api/sessions', (req, res) => {
-  const { projectName } = req.body;
-  const projectPath = resolveProjectPath(projectName);
+  const { projectName, type } = req.body;
+  const projectType = type || 'personal';
+  const projectPath = resolveUserProjectPath(req.user.username, projectName, projectType);
   if (!fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
 
   const id = crypto.randomUUID();
-  activeSessions.set(id, { claudeSessionId: null, projectPath, projectName, lastActive: Date.now() });
+  activeSessions.set(id, { claudeSessionId: null, projectPath, projectName, projectType, username: req.user.username, lastActive: Date.now() });
   res.json({ id, projectPath, projectName });
 });
 
 // Resume an existing claude session
 app.post('/api/sessions/resume', (req, res) => {
-  const { projectName, claudeSessionId } = req.body;
-  const projectPath = resolveProjectPath(projectName);
+  const { projectName, claudeSessionId, type } = req.body;
+  const projectType = type || 'personal';
+  const projectPath = resolveUserProjectPath(req.user.username, projectName, projectType);
   if (!fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
 
   for (const [existingId, s] of activeSessions) {
-    if (s.claudeSessionId === claudeSessionId && s.childProcess && !s.childProcess.killed) {
+    if (s.claudeSessionId === claudeSessionId && s.username === req.user.username && s.childProcess && !s.childProcess.killed) {
       s.lastActive = Date.now();
       return res.json({ id: existingId, claudeSessionId, projectPath, projectName, running: true });
     }
   }
 
   const id = crypto.randomUUID();
-  activeSessions.set(id, { claudeSessionId, projectPath, projectName, lastActive: Date.now() });
+  activeSessions.set(id, { claudeSessionId, projectPath, projectName, projectType, username: req.user.username, lastActive: Date.now() });
   res.json({ id, claudeSessionId, projectPath, projectName, running: false });
 });
 
@@ -401,19 +682,20 @@ app.post('/api/sessions/:id/message', (req, res) => {
   claudeArgs.push('--dangerously-skip-permissions');
 
   let child;
+  const username = session.username;
   if (config.USE_SANDBOX) {
-    const bwrapArgs = buildSandboxArgs(session.projectPath, claudeArgs);
-    console.log(`[spawn] bwrap sandbox for ${session.projectPath}`);
+    const bwrapArgs = buildUserSandboxArgs(username, session.projectPath, claudeArgs);
+    console.log(`[spawn] bwrap sandbox for ${username}@${session.projectPath}`);
     child = spawn(config.BWRAP_PATH, bwrapArgs, {
-      env: { ...process.env, HOME: HOME_DIR },
+      env: { ...process.env, HOME: getUserHome(username) },
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: true
     });
   } else {
-    console.log(`[spawn] direct (no sandbox) for ${session.projectPath}`);
+    console.log(`[spawn] direct (no sandbox) for ${username}@${session.projectPath}`);
     child = spawn(config.CLAUDE_CLI_PATH, claudeArgs, {
       cwd: session.projectPath,
-      env: { ...process.env, HOME: HOME_DIR },
+      env: { ...process.env, HOME: getUserHome(username) },
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: true
     });
@@ -449,7 +731,6 @@ app.post('/api/sessions/:id/message', (req, res) => {
       if (!line.trim()) continue;
       try {
         const evt = JSON.parse(line);
-
         if (evt.type === 'system' && evt.subtype === 'init') {
           session.claudeSessionId = evt.session_id;
           sseSend({ type: 'init', sessionId: evt.session_id });
@@ -469,6 +750,7 @@ app.post('/api/sessions/:id/message', (req, res) => {
           if (evt.result && !fullText) fullText = evt.result;
           session._lastCost = evt.total_cost_usd;
           session._lastDuration = evt.duration_ms;
+          session._lastUsage = evt.usage || {};
           sseSend({ type: 'done', text: evt.result, cost: evt.total_cost_usd, duration: evt.duration_ms });
         }
       } catch {}
@@ -478,9 +760,7 @@ app.post('/api/sessions/:id/message', (req, res) => {
   child.stderr.on('data', (chunk) => {
     const errText = chunk.toString();
     console.error('[claude stderr]', errText);
-    if (errText.trim()) {
-      sseSend({ type: 'error', text: errText });
-    }
+    if (errText.trim()) sseSend({ type: 'error', text: errText });
   });
 
   child.on('close', (code, signal) => {
@@ -488,6 +768,15 @@ app.post('/api/sessions/:id/message', (req, res) => {
     session.childProcess = null;
     cleanupTempFiles();
     session.lastResult = { text: fullText, cost: session._lastCost, duration: session._lastDuration };
+    // Log chat with token usage
+    const usage = session._lastUsage || {};
+    logChat(req.user.id, req.user.username, session.projectName, session.projectType, session.claudeSessionId, prompt, {
+      inputTokens: usage.input_tokens || 0,
+      outputTokens: usage.output_tokens || 0,
+      cacheReadTokens: usage.cache_read_input_tokens || 0,
+      costUsd: session._lastCost || 0,
+      durationMs: session._lastDuration || 0
+    });
     sseSend({ type: 'end' });
     if (resAlive) { try { res.end(); } catch {} }
     resAlive = false;
@@ -497,9 +786,7 @@ app.post('/api/sessions/:id/message', (req, res) => {
     }
   });
 
-  res.on('close', () => {
-    resAlive = false;
-  });
+  res.on('close', () => { resAlive = false; });
 });
 
 // Wait for session result (reconnection endpoint)
@@ -535,12 +822,9 @@ app.get('/api/sessions/:id/wait', (req, res) => {
     } catch {}
   };
   session._waitCallbacks.push(onDone);
-
   res.on('close', () => {
     waitAlive = false;
-    if (session._waitCallbacks) {
-      session._waitCallbacks = session._waitCallbacks.filter(cb => cb !== onDone);
-    }
+    if (session._waitCallbacks) session._waitCallbacks = session._waitCallbacks.filter(cb => cb !== onDone);
   });
 });
 
@@ -550,21 +834,37 @@ app.post('/api/sessions/:id/stop', (req, res) => {
   if (!session) return res.status(404).json({ error: 'Session not found' });
   if (session.childProcess && !session.childProcess.killed) {
     console.log(`[stop] sending SIGINT to session ${req.params.id}, pid=${session.childProcess.pid}`);
-    try {
-      process.kill(-session.childProcess.pid, 'SIGINT');
-    } catch (e) {
-      session.childProcess.kill('SIGINT');
-    }
+    try { process.kill(-session.childProcess.pid, 'SIGINT'); } catch (e) { session.childProcess.kill('SIGINT'); }
     res.json({ ok: true });
   } else {
     res.json({ ok: false, reason: 'No running process' });
   }
 });
 
-// ========== File Tree & Upload ==========
+app.delete('/api/sessions/:id', (req, res) => {
+  activeSessions.delete(req.params.id);
+  res.json({ ok: true });
+});
 
+app.delete('/api/sessions/:sessionId/delete', (req, res) => {
+  const { sessionId } = req.params;
+  const projectName = req.query.project;
+  const projectType = req.query.type || 'personal';
+  if (!projectName) return res.status(400).json({ error: 'project required' });
+  const projectPath = resolveUserProjectPath(req.user.username, projectName, projectType);
+  const sessionDir = path.join(CLAUDE_SESSIONS_ROOT, projectToSessionDir(projectPath));
+  const jsonlPath = path.join(sessionDir, `${sessionId}.jsonl`);
+  try { if (fs.existsSync(jsonlPath)) fs.unlinkSync(jsonlPath); } catch {}
+  try { db.prepare('DELETE FROM session_names WHERE session_id = ?').run(sessionId); } catch {}
+  for (const [id, s] of activeSessions) {
+    if (s.claudeSessionId === sessionId) { activeSessions.delete(id); break; }
+  }
+  res.json({ ok: true });
+});
+
+// ========== File Tree & Upload ==========
 app.get('/api/projects/:name/files', (req, res) => {
-  const projectPath = resolveProjectPath(req.params.name);
+  const projectPath = resolveUserProjectPath(req.user.username, req.params.name, req.query.type || 'personal');
   if (!fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
 
   const relDir = req.query.path || '';
@@ -577,10 +877,7 @@ app.get('/api/projects/:name/files', (req, res) => {
     const entries = fs.readdirSync(absDir, { withFileTypes: true })
       .filter(e => !HIDDEN.has(e.name) && !e.name.startsWith('.git'))
       .map(e => ({ name: e.name, isDir: e.isDirectory() }))
-      .sort((a, b) => {
-        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      });
+      .sort((a, b) => { if (a.isDir !== b.isDir) return a.isDir ? -1 : 1; return a.name.localeCompare(b.name); });
     res.json({ path: relDir, entries });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -588,7 +885,7 @@ app.get('/api/projects/:name/files', (req, res) => {
 });
 
 app.post('/api/projects/:name/upload', upload.array('files', 20), (req, res) => {
-  const projectPath = resolveProjectPath(req.params.name);
+  const projectPath = resolveUserProjectPath(req.user.username, req.params.name, req.query.type || req.body.type || 'personal');
   if (!fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
 
   const targetDir = req.body.targetDir || '';
@@ -612,7 +909,7 @@ app.post('/api/projects/:name/upload', upload.array('files', 20), (req, res) => 
 });
 
 app.post('/api/projects/:name/upload-zip', upload.single('file'), (req, res) => {
-  const projectPath = resolveProjectPath(req.params.name);
+  const projectPath = resolveUserProjectPath(req.user.username, req.params.name, req.query.type || req.body.type || 'personal');
   if (!fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
@@ -636,21 +933,17 @@ app.post('/api/projects/:name/upload-zip', upload.single('file'), (req, res) => 
 });
 
 // ========== Git Commit & Push ==========
-
 function gitExec(args, projectPath) {
   return execSync(`git ${args}`, { cwd: projectPath, encoding: 'utf8', timeout: 30000 });
 }
 
 app.get('/api/projects/:name/git-status', (req, res) => {
-  const projectPath = resolveProjectPath(req.params.name);
+  const projectPath = resolveUserProjectPath(req.user.username, req.params.name, req.query.type || 'personal');
   if (!fs.existsSync(path.join(projectPath, '.git'))) return res.status(400).json({ error: 'Not a git repo' });
 
   try {
     const status = gitExec('status --porcelain', projectPath);
-    const files = status.trim().split('\n').filter(Boolean).map(line => ({
-      status: line.substring(0, 2).trim(),
-      file: line.substring(3)
-    }));
+    const files = status.trim().split('\n').filter(Boolean).map(line => ({ status: line.substring(0, 2).trim(), file: line.substring(3) }));
     const branch = gitExec('branch --show-current', projectPath).trim();
     let hasRemote = false;
     try { gitExec('remote get-url origin', projectPath); hasRemote = true; } catch {}
@@ -661,22 +954,17 @@ app.get('/api/projects/:name/git-status', (req, res) => {
 });
 
 app.post('/api/projects/:name/git-push', (req, res) => {
-  const projectPath = resolveProjectPath(req.params.name);
+  const projectPath = resolveUserProjectPath(req.user.username, req.params.name, req.query.type || req.body.type || 'personal');
   if (!fs.existsSync(path.join(projectPath, '.git'))) return res.status(400).json({ error: 'Not a git repo' });
 
   const commitMsg = req.body.message || 'Update from ccmobile';
-
   try {
     execSync('git add -A', { cwd: projectPath, encoding: 'utf8' });
     const result = require('child_process').spawnSync('git', ['commit', '-m', commitMsg], { cwd: projectPath, encoding: 'utf8' });
     if (result.status !== 0) throw new Error(result.stderr || 'Commit failed');
-
-    let pushed = false;
-    let hasRemote = false;
+    let pushed = false, hasRemote = false;
     try { gitExec('remote get-url origin', projectPath); hasRemote = true; } catch {}
-    if (hasRemote) {
-      try { gitExec('push', projectPath); pushed = true; } catch {}
-    }
+    if (hasRemote) { try { gitExec('push', projectPath); pushed = true; } catch {} }
     res.json({ ok: true, pushed, hasRemote });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -684,40 +972,33 @@ app.post('/api/projects/:name/git-push', (req, res) => {
 });
 
 // ========== Rewind ==========
-
 app.get('/api/sessions/:sessionId/rewind-points', async (req, res) => {
   const { sessionId } = req.params;
   const projectName = req.query.project;
+  const projectType = req.query.type || 'personal';
   if (!projectName) return res.status(400).json({ error: 'project query param required' });
 
-  const projectPath = resolveProjectPath(projectName);
+  const projectPath = resolveUserProjectPath(req.user.username, projectName, projectType);
   const sessionDir = path.join(CLAUDE_SESSIONS_ROOT, projectToSessionDir(projectPath));
   const filePath = path.join(sessionDir, `${sessionId}.jsonl`);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Session not found' });
 
   const { userMessages, snapshotGroups } = await parseSessionJSONL(filePath);
-
   const points = [];
   for (const [msgId, snapshot] of snapshotGroups) {
     const userMsg = userMessages.get(msgId);
     if (!userMsg) continue;
-    const fileCount = Object.keys(snapshot.trackedFileBackups || {}).filter(
-      f => snapshot.trackedFileBackups[f].backupFileName != null
-    ).length;
+    const fileCount = Object.keys(snapshot.trackedFileBackups || {}).filter(f => snapshot.trackedFileBackups[f].backupFileName != null).length;
     if (fileCount === 0) continue;
-    points.push({
-      messageId: msgId,
-      userContent: userMsg.content,
-      timestamp: snapshot.timestamp || userMsg.timestamp,
-      fileCount
-    });
+    points.push({ messageId: msgId, userContent: userMsg.content, timestamp: snapshot.timestamp || userMsg.timestamp, fileCount });
   }
   res.json(points);
 });
 
 app.post('/api/rewind', async (req, res) => {
-  const { projectName, sessionId, messageId } = req.body;
-  const projectPath = resolveProjectPath(projectName);
+  const { projectName, sessionId, messageId, type } = req.body;
+  const projectType = type || 'personal';
+  const projectPath = resolveUserProjectPath(req.user.username, projectName, projectType);
   if (!fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
 
   const sessionDir = path.join(CLAUDE_SESSIONS_ROOT, projectToSessionDir(projectPath));
@@ -744,44 +1025,18 @@ app.post('/api/rewind', async (req, res) => {
           errors.push(`backup missing: ${relPath}`);
         }
       } else {
-        if (fs.existsSync(targetPath)) {
-          fs.unlinkSync(targetPath);
-          deleted.push(relPath);
-        }
+        if (fs.existsSync(targetPath)) { fs.unlinkSync(targetPath); deleted.push(relPath); }
       }
-    } catch (e) {
-      errors.push(`${relPath}: ${e.message}`);
-    }
+    } catch (e) { errors.push(`${relPath}: ${e.message}`); }
   }
 
   console.log(`[rewind] restored=${restored.length}, deleted=${deleted.length}, errors=${errors.length}`);
   res.json({ ok: true, restored, deleted, errors });
 });
 
-app.delete('/api/sessions/:id', (req, res) => {
-  activeSessions.delete(req.params.id);
-  res.json({ ok: true });
-});
-
-app.delete('/api/sessions/:sessionId/delete', (req, res) => {
-  const { sessionId } = req.params;
-  const projectName = req.query.project;
-  if (!projectName) return res.status(400).json({ error: 'project required' });
-  const projectPath = resolveProjectPath(projectName);
-  const sessionDir = path.join(CLAUDE_SESSIONS_ROOT, projectToSessionDir(projectPath));
-  const jsonlPath = path.join(sessionDir, `${sessionId}.jsonl`);
-  try { if (fs.existsSync(jsonlPath)) fs.unlinkSync(jsonlPath); } catch {}
-  try { db.prepare('DELETE FROM session_names WHERE session_id = ?').run(sessionId); } catch {}
-  for (const [id, s] of activeSessions) {
-    if (s.claudeSessionId === sessionId) { activeSessions.delete(id); break; }
-  }
-  res.json({ ok: true });
-});
-
 // ========== Project Notes ==========
-
 app.get('/api/projects/:name/notes', (req, res) => {
-  const notes = db.prepare('SELECT * FROM project_notes WHERE project = ? ORDER BY created_at DESC').all(req.params.name);
+  const notes = db.prepare('SELECT * FROM project_notes WHERE project = ? AND (user_id = ? OR user_id IS NULL) ORDER BY created_at DESC').all(req.params.name, req.user.id);
   res.json(notes);
 });
 
@@ -790,7 +1045,7 @@ app.post('/api/projects/:name/notes', (req, res) => {
   if (!content || !content.trim()) return res.status(400).json({ error: 'Content required' });
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  db.prepare('INSERT INTO project_notes (id, project, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(id, req.params.name, content.trim(), now, now);
+  db.prepare('INSERT INTO project_notes (id, project, content, created_at, updated_at, user_id) VALUES (?, ?, ?, ?, ?, ?)').run(id, req.params.name, content.trim(), now, now, req.user.id);
   res.json({ id, project: req.params.name, content: content.trim(), created_at: now, updated_at: now });
 });
 
@@ -798,16 +1053,231 @@ app.put('/api/projects/:name/notes/:id', (req, res) => {
   const { content } = req.body;
   if (!content || !content.trim()) return res.status(400).json({ error: 'Content required' });
   const now = new Date().toISOString();
-  db.prepare('UPDATE project_notes SET content = ?, updated_at = ? WHERE id = ? AND project = ?').run(content.trim(), now, req.params.id, req.params.name);
+  db.prepare('UPDATE project_notes SET content = ?, updated_at = ? WHERE id = ? AND project = ? AND user_id = ?').run(content.trim(), now, req.params.id, req.params.name, req.user.id);
   res.json({ ok: true });
 });
 
 app.delete('/api/projects/:name/notes/:id', (req, res) => {
-  db.prepare('DELETE FROM project_notes WHERE id = ? AND project = ?').run(req.params.id, req.params.name);
+  db.prepare('DELETE FROM project_notes WHERE id = ? AND project = ? AND user_id = ?').run(req.params.id, req.params.name, req.user.id);
   res.json({ ok: true });
 });
 
-// Startup preflight
+// ========== Shared Projects (all users) ==========
+app.get('/api/shared-projects', (req, res) => {
+  const projects = db.prepare('SELECT * FROM shared_projects ORDER BY created_at DESC').all();
+  const result = projects.map(p => {
+    const access = db.prepare('SELECT status FROM project_access WHERE project_id = ? AND user_id = ?').get(p.id, req.user.id);
+    return { ...p, myAccess: access ? access.status : null };
+  });
+  res.json(result);
+});
+
+app.post('/api/shared-projects/:id/request-access', (req, res) => {
+  const project = db.prepare('SELECT * FROM shared_projects WHERE id = ?').get(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const existing = db.prepare('SELECT * FROM project_access WHERE project_id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (existing) return res.status(400).json({ error: `Already ${existing.status}` });
+
+  const id = crypto.randomUUID();
+  db.prepare('INSERT INTO project_access (id, project_id, user_id, status, requested_at) VALUES (?, ?, ?, ?, ?)')
+    .run(id, req.params.id, req.user.id, 'pending', new Date().toISOString());
+  res.json({ ok: true, status: 'pending' });
+});
+
+app.get('/api/my-access-requests', (req, res) => {
+  const requests = db.prepare(`
+    SELECT pa.*, sp.name as project_name, sp.description as project_description
+    FROM project_access pa JOIN shared_projects sp ON pa.project_id = sp.id
+    WHERE pa.user_id = ? ORDER BY pa.requested_at DESC
+  `).all(req.user.id);
+  res.json(requests);
+});
+
+// ========== Admin: User Management ==========
+app.get('/api/admin/users', requireAdmin, (req, res) => {
+  const users = db.prepare('SELECT id, username, role, created_at, last_login FROM users ORDER BY created_at').all();
+  res.json(users);
+});
+
+app.post('/api/admin/users', requireAdmin, (req, res) => {
+  const { username, password, role } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+  if (username.length < 2) return res.status(400).json({ error: 'Username too short' });
+  if (password.length < 4) return res.status(400).json({ error: 'Password too short (min 4)' });
+  if (!/^[a-zA-Z0-9_-]+$/.test(username)) return res.status(400).json({ error: 'Username must be alphanumeric (a-z, 0-9, _, -)' });
+
+  const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
+  if (existing) return res.status(409).json({ error: 'Username already exists' });
+
+  const id = crypto.randomUUID();
+  const hash = bcrypt.hashSync(password, 10);
+  const userRole = (role === 'admin') ? 'admin' : 'user';
+  db.prepare('INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(id, username, hash, userRole, new Date().toISOString());
+
+  // Create user directories
+  ensureUserDirs(username);
+
+  logSystem('admin.create_user', req.user.id, req.user.username, `Created user "${username}" (role: ${userRole})`);
+  res.json({ ok: true, user: { id, username, role: userRole } });
+});
+
+app.delete('/api/admin/users/:id', requireAdmin, (req, res) => {
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (user.id === req.user.id) return res.status(400).json({ error: 'Cannot delete yourself' });
+
+  db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
+  db.prepare('DELETE FROM project_access WHERE user_id = ?').run(req.params.id);
+  // Invalidate tokens for this user
+  for (const [token, session] of authTokens) {
+    if (session.user.id === req.params.id) authTokens.delete(token);
+  }
+  logSystem('admin.delete_user', req.user.id, req.user.username, `Deleted user "${user.username}"`);
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/users/:id/reset-password', requireAdmin, (req, res) => {
+  const { newPassword } = req.body;
+  if (!newPassword || newPassword.length < 4) return res.status(400).json({ error: 'Password too short (min 4)' });
+
+  const user = db.prepare('SELECT id FROM users WHERE id = ?').get(req.params.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  const hash = bcrypt.hashSync(newPassword, 10);
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, req.params.id);
+  res.json({ ok: true });
+});
+
+// ========== Admin: Shared Projects ==========
+app.post('/api/admin/shared-projects', requireAdmin, (req, res) => {
+  const { name, description } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Project name required' });
+  const projName = name.trim().replace(/[^a-zA-Z0-9_\-\.]/g, '-');
+
+  const existing = db.prepare('SELECT id FROM shared_projects WHERE name = ?').get(projName);
+  if (existing) return res.status(409).json({ error: 'Project name already exists' });
+
+  // Create directory
+  const projPath = path.join(SHARED_PROJECTS_ROOT, projName);
+  if (!fs.existsSync(projPath)) fs.mkdirSync(projPath, { recursive: true });
+
+  const id = crypto.randomUUID();
+  db.prepare('INSERT INTO shared_projects (id, name, description, created_by, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(id, projName, description || '', req.user.id, new Date().toISOString());
+
+  // Auto-approve admin
+  const accessId = crypto.randomUUID();
+  db.prepare('INSERT INTO project_access (id, project_id, user_id, status, requested_at, reviewed_at, reviewed_by) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(accessId, id, req.user.id, 'approved', new Date().toISOString(), new Date().toISOString(), req.user.id);
+
+  logSystem('admin.create_shared_project', req.user.id, req.user.username, `Created shared project "${projName}"`);
+  res.json({ ok: true, project: { id, name: projName, description: description || '' } });
+});
+
+app.delete('/api/admin/shared-projects/:id', requireAdmin, (req, res) => {
+  const project = db.prepare('SELECT * FROM shared_projects WHERE id = ?').get(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  db.prepare('DELETE FROM shared_projects WHERE id = ?').run(req.params.id);
+  db.prepare('DELETE FROM project_access WHERE project_id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+app.get('/api/admin/shared-projects/:id/members', requireAdmin, (req, res) => {
+  const members = db.prepare(`
+    SELECT pa.*, u.username FROM project_access pa
+    JOIN users u ON pa.user_id = u.id
+    WHERE pa.project_id = ? ORDER BY pa.requested_at DESC
+  `).all(req.params.id);
+  res.json(members);
+});
+
+// ========== Admin: Access Requests ==========
+app.get('/api/admin/access-requests', requireAdmin, (req, res) => {
+  const requests = db.prepare(`
+    SELECT pa.*, u.username, sp.name as project_name
+    FROM project_access pa
+    JOIN users u ON pa.user_id = u.id
+    JOIN shared_projects sp ON pa.project_id = sp.id
+    WHERE pa.status = 'pending'
+    ORDER BY pa.requested_at ASC
+  `).all();
+  res.json(requests);
+});
+
+app.post('/api/admin/access-requests/:id/approve', requireAdmin, (req, res) => {
+  const request = db.prepare('SELECT pa.*, u.username as req_user, sp.name as proj_name FROM project_access pa JOIN users u ON pa.user_id = u.id JOIN shared_projects sp ON pa.project_id = sp.id WHERE pa.id = ?').get(req.params.id);
+  if (!request) return res.status(404).json({ error: 'Request not found' });
+
+  db.prepare('UPDATE project_access SET status = ?, reviewed_at = ?, reviewed_by = ? WHERE id = ?')
+    .run('approved', new Date().toISOString(), req.user.id, req.params.id);
+  logSystem('admin.approve_access', req.user.id, req.user.username, `Approved ${request.req_user} access to "${request.proj_name}"`);
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/access-requests/:id/reject', requireAdmin, (req, res) => {
+  const request = db.prepare('SELECT pa.*, u.username as req_user, sp.name as proj_name FROM project_access pa JOIN users u ON pa.user_id = u.id JOIN shared_projects sp ON pa.project_id = sp.id WHERE pa.id = ?').get(req.params.id);
+  if (!request) return res.status(404).json({ error: 'Request not found' });
+
+  db.prepare('UPDATE project_access SET status = ?, reviewed_at = ?, reviewed_by = ? WHERE id = ?')
+    .run('rejected', new Date().toISOString(), req.user.id, req.params.id);
+  logSystem('admin.reject_access', req.user.id, req.user.username, `Rejected ${request.req_user} access to "${request.proj_name}"`);
+  res.json({ ok: true });
+});
+
+// ========== Admin: Logs ==========
+app.get('/api/admin/logs/system', requireAdmin, (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+  const offset = parseInt(req.query.offset) || 0;
+  const logs = db.prepare('SELECT * FROM system_logs ORDER BY timestamp DESC LIMIT ? OFFSET ?').all(limit, offset);
+  const total = db.prepare('SELECT COUNT(*) as cnt FROM system_logs').get().cnt;
+  res.json({ logs, total });
+});
+
+app.get('/api/admin/logs/chat', requireAdmin, (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+  const offset = parseInt(req.query.offset) || 0;
+  const userId = req.query.user_id || null;
+  let logs, total;
+  if (userId) {
+    logs = db.prepare('SELECT * FROM chat_logs WHERE user_id = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?').all(userId, limit, offset);
+    total = db.prepare('SELECT COUNT(*) as cnt FROM chat_logs WHERE user_id = ?').get(userId).cnt;
+  } else {
+    logs = db.prepare('SELECT * FROM chat_logs ORDER BY timestamp DESC LIMIT ? OFFSET ?').all(limit, offset);
+    total = db.prepare('SELECT COUNT(*) as cnt FROM chat_logs').get().cnt;
+  }
+  res.json({ logs, total });
+});
+
+app.get('/api/admin/logs/stats', requireAdmin, (req, res) => {
+  // Per-user token consumption summary
+  const stats = db.prepare(`
+    SELECT user_id, username,
+      COUNT(*) as total_chats,
+      SUM(input_tokens) as total_input_tokens,
+      SUM(output_tokens) as total_output_tokens,
+      SUM(cache_read_tokens) as total_cache_tokens,
+      ROUND(SUM(cost_usd), 6) as total_cost_usd,
+      SUM(duration_ms) as total_duration_ms
+    FROM chat_logs GROUP BY user_id ORDER BY total_cost_usd DESC
+  `).all();
+  res.json(stats);
+});
+
+// ========== Auto-cleanup stale sessions ==========
+setInterval(() => {
+  const cutoff = Date.now() - 2 * 60 * 60 * 1000;
+  for (const [id, s] of activeSessions) {
+    if ((s.lastActive || 0) < cutoff) activeSessions.delete(id);
+  }
+}, 10 * 60 * 1000);
+
+// ========== Startup ==========
+ensureDirs();
+ensureAdminUser();
+
 const PORT = config.PORT;
 console.log('');
 console.log('  ╔══════════════════════════════════════╗');
@@ -826,13 +1296,10 @@ if (fs.existsSync(config.CLAUDE_CLI_PATH)) {
   console.log(`               Install: npm install -g @anthropic-ai/claude-code`);
 }
 console.log(`  Sandbox    : ${config.USE_SANDBOX ? 'enabled (bwrap)' : 'disabled (direct mode)'}`);
-if (!fs.existsSync(PROJECT_ROOT)) {
-  fs.mkdirSync(PROJECT_ROOT, { recursive: true });
-  console.log(`  Projects   : ${PROJECT_ROOT} (created, empty)`);
-} else {
-  const pCount = fs.readdirSync(PROJECT_ROOT, { withFileTypes: true }).filter(d => d.isDirectory() && !d.name.startsWith('.')).length;
-  console.log(`  Projects   : ${PROJECT_ROOT} (${pCount} projects)`);
-}
+console.log(`  User data  : ${USER_DATA_ROOT}`);
+console.log(`  Shared     : ${SHARED_PROJECTS_ROOT}`);
+const userCount = db.prepare('SELECT COUNT(*) as cnt FROM users').get().cnt;
+console.log(`  Users      : ${userCount} registered`);
 if (!config.HAS_ENV) {
   console.log(`  Config     : no .env file — open browser to run setup wizard`);
 } else {

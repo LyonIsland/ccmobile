@@ -117,8 +117,8 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .login-form { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 360px; }
 .login-form input {
   width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-  color: var(--text); padding: 14px 18px; font-size: 15px; font-family: 'SF Mono', 'Fira Code', monospace;
-  outline: none; text-align: center; transition: border-color .15s;
+  color: var(--text); padding: 14px 18px; font-size: 15px;
+  outline: none; transition: border-color .15s;
 }
 .login-form input:focus { border-color: var(--accent); }
 .login-form button {
@@ -670,6 +670,23 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .setup-btn:hover { background: var(--accent-hover); }
 .setup-btn:disabled { opacity: .4; }
 .setup-error { color: var(--red); font-size: 13px; text-align: center; margin-top: 10px; }
+
+/* ====== Onboarding Guide ====== */
+.onboard-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 9999; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; }
+.onboard-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+  padding: 28px 32px; max-width: 420px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,.4);
+}
+.onboard-card h2 { font-size: 18px; margin-bottom: 16px; color: var(--accent); }
+.onboard-card p { font-size: 14px; line-height: 1.7; color: var(--text); margin-bottom: 12px; }
+.onboard-card .step-num { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; margin-right: 8px; }
+.onboard-card .step { margin-bottom: 10px; display: flex; align-items: flex-start; }
+.onboard-card .step-text { flex: 1; font-size: 14px; line-height: 1.6; }
+.onboard-card .hint { font-size: 12px; color: var(--text3); margin-top: 12px; }
+.onboard-actions { display: flex; gap: 10px; margin-top: 20px; justify-content: flex-end; }
+.onboard-actions button { padding: 10px 20px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
+.onboard-actions .btn-skip { background: var(--surface2); color: var(--text2); }
+.onboard-actions .btn-next { background: var(--accent); color: #fff; }
 </style>
 </head>
 <body>
@@ -680,8 +697,9 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <div class="login-logo">ccmobile</div>
     <div class="login-subtitle">Claude Code in Your Browser</div>
     <div class="login-form">
-      <input id="login-key" type="password" placeholder="Access Key" autocomplete="off">
-      <button id="login-btn" onclick="doLogin()">Continue</button>
+      <input id="login-user" type="text" placeholder="Username" autocomplete="username">
+      <input id="login-pass" type="password" placeholder="Password" autocomplete="current-password">
+      <button id="login-btn" onclick="doLogin()">Login</button>
       <div class="login-error" id="login-error"></div>
     </div>
   </div>
@@ -748,7 +766,9 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     </div>
 
     <div class="sidebar-footer" id="sidebar-footer" style="display:none">
-      <span class="user-info"></span>
+      <span class="user-info" id="user-display"></span>
+      <button class="icon-btn" id="btn-admin" onclick="showPage('admin')" title="Admin" style="display:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15 1.65 1.65 0 003 14.08V14a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V21a2 2 0 010 4h.09"/></svg></button>
+      <button class="icon-btn" onclick="showPage('marketplace')" title="Shared Projects"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg></button>
       <button class="icon-btn danger" onclick="logout()" title="Logout"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
     </div>
   </div>
@@ -759,6 +779,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <div id="page-projects" class="page active">
       <div class="projects-header">
         <h1>Projects</h1>
+        <button class="btn-action" onclick="openCreateProjectModal()" title="New Project" style="font-size:18px;font-weight:700;line-height:1">+</button>
         <button class="btn-action" id="btn-sort" onclick="toggleSortMode()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5h10"/><path d="M11 9h7"/><path d="M11 13h4"/><path d="M3 17l3 3 3-3"/><path d="M6 18V4"/></svg></button>
       </div>
       <div class="projects-grid scroll-area" id="project-list"></div>
@@ -795,6 +816,56 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 
     <!-- Ideas Tab (right edge) -->
     <button class="btn-ideas-tab" id="btn-ideas-tab" onclick="toggleIdeasPanel()" style="display:none"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 1 4 12.7V17a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1v-2.3A7 7 0 0 1 12 2z"/></svg>Ideas</button>
+
+    <!-- Page: Admin Panel -->
+    <div id="page-admin" class="page">
+      <div class="projects-header"><h1>Admin Panel</h1><button class="btn-action" onclick="showPage('projects')">&larr; Back</button></div>
+      <div class="admin-content scroll-area" id="admin-content" style="flex:1;overflow-y:auto;padding:16px 32px">
+        <div class="admin-section">
+          <h3 style="margin-bottom:12px">Users</h3>
+          <div class="admin-create-row" style="display:flex;gap:8px;margin-bottom:12px">
+            <input id="admin-new-user" placeholder="Username" style="flex:1;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text)">
+            <input id="admin-new-pass" type="password" placeholder="Password" style="flex:1;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text)">
+            <select id="admin-new-role" style="padding:8px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text)"><option value="user">User</option><option value="admin">Admin</option></select>
+            <button onclick="adminCreateUser()" style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:8px;cursor:pointer">Create</button>
+          </div>
+          <div id="admin-user-list"></div>
+        </div>
+        <div class="admin-section" style="margin-top:24px">
+          <h3 style="margin-bottom:12px">Shared Projects</h3>
+          <div class="admin-create-row" style="display:flex;gap:8px;margin-bottom:12px">
+            <input id="admin-new-proj" placeholder="Project name" style="flex:1;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text)">
+            <input id="admin-new-proj-desc" placeholder="Description" style="flex:2;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text)">
+            <button onclick="adminCreateSharedProject()" style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:8px;cursor:pointer">Create</button>
+          </div>
+          <div id="admin-shared-list"></div>
+        </div>
+        <div class="admin-section" style="margin-top:24px">
+          <h3 style="margin-bottom:12px">Pending Access Requests</h3>
+          <div id="admin-requests-list"></div>
+        </div>
+        <div class="admin-section" style="margin-top:24px">
+          <h3 style="margin-bottom:12px">Token Usage (Per User)</h3>
+          <div id="admin-stats-list"></div>
+        </div>
+        <div class="admin-section" style="margin-top:24px">
+          <h3 style="margin-bottom:12px">Chat Logs
+            <select id="admin-chatlog-user" onchange="loadAdminChatLogs()" style="margin-left:8px;padding:4px 8px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px"><option value="">All Users</option></select>
+          </h3>
+          <div id="admin-chatlog-list" style="max-height:400px;overflow-y:auto"></div>
+        </div>
+        <div class="admin-section" style="margin-top:24px">
+          <h3 style="margin-bottom:12px">System Logs</h3>
+          <div id="admin-syslog-list" style="max-height:300px;overflow-y:auto"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Page: Shared Projects Marketplace -->
+    <div id="page-marketplace" class="page">
+      <div class="projects-header"><h1>Shared Projects</h1><button class="btn-action" onclick="showPage('projects')">&larr; Back</button></div>
+      <div class="projects-grid scroll-area" id="marketplace-list" style="flex:1;overflow-y:auto;padding:4px 32px 32px"></div>
+    </div>
 
     <!-- Ideas Panel -->
     <div class="ideas-panel" id="ideas-panel">
@@ -853,6 +924,37 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   </div>
 </div>
 
+<!-- Onboarding Guide -->
+<div id="onboard-overlay" class="onboard-overlay" style="display:none"></div>
+
+<!-- Modal: Create Project -->
+<div id="create-project-modal" class="modal-overlay" onclick="if(event.target===this)closeCreateProjectModal()">
+  <div class="modal">
+    <div class="modal-title">New Project</div>
+    <div style="margin-bottom:12px">
+      <label style="display:flex;gap:12px;align-items:center;margin-bottom:12px">
+        <input type="radio" name="proj-type" value="personal" checked onchange="toggleProjectType()"> Private
+      </label>
+      <label style="display:flex;gap:12px;align-items:center">
+        <input type="radio" name="proj-type" value="shared" onchange="toggleProjectType()"> Shared
+      </label>
+    </div>
+    <label>Project Name</label>
+    <input id="create-proj-name" type="text" placeholder="my-project" style="width:100%;padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);margin-bottom:8px">
+    <div id="create-proj-shared-section" style="display:none">
+      <label>Description</label>
+      <input id="create-proj-desc" type="text" placeholder="Optional description" style="width:100%;padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);margin-bottom:8px">
+      <label>Share with users</label>
+      <div id="create-proj-users" style="max-height:150px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px;margin-bottom:8px"></div>
+    </div>
+    <div class="modal-error" id="create-proj-error"></div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeCreateProjectModal()">Cancel</button>
+      <button class="btn-create" id="btn-create-proj" onclick="doCreateProject()">Create</button>
+    </div>
+  </div>
+</div>
+
 
 <script>
 const $ = s => document.querySelector(s);
@@ -869,10 +971,12 @@ function toggleTheme() {
 }
 applyTheme(localStorage.getItem('ccmobile_theme') || 'dark');
 
-let authKey = localStorage.getItem('ccmobile_key') || '';
+let authToken = localStorage.getItem('ccmobile_token') || '';
+let currentUser = JSON.parse(localStorage.getItem('ccmobile_user') || 'null');
 
 let state = {
   currentProject: null,
+  currentProjectType: 'personal',
   activeId: null,
   claudeSessionId: null,
   sending: false,
@@ -883,7 +987,7 @@ let state = {
 };
 
 function authFetch(url, opts = {}) {
-  opts.headers = { ...opts.headers, 'Authorization': authKey };
+  opts.headers = { ...opts.headers, 'Authorization': 'Bearer ' + authToken };
   return fetch(url, opts).then(r => {
     if (r.status === 401) { logout(); throw new Error('Unauthorized'); }
     return r;
@@ -891,21 +995,26 @@ function authFetch(url, opts = {}) {
 }
 
 async function doLogin() {
-  const key = $('#login-key').value.trim();
+  const username = $('#login-user').value.trim();
+  const password = $('#login-pass').value.trim();
+  if (!username || !password) { $('#login-error').textContent = 'Please enter username and password'; return; }
   $('#login-btn').disabled = true;
   $('#login-error').textContent = '';
   try {
-    const res = await fetch('/api/auth', {
+    const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key })
+      body: JSON.stringify({ username, password })
     });
+    const data = await res.json();
     if (res.ok) {
-      authKey = key;
-      localStorage.setItem('ccmobile_key', key);
+      authToken = data.token;
+      currentUser = data.user;
+      localStorage.setItem('ccmobile_token', data.token);
+      localStorage.setItem('ccmobile_user', JSON.stringify(data.user));
       enterApp();
     } else {
-      $('#login-error').textContent = 'Invalid access key';
+      $('#login-error').textContent = data.error || 'Login failed';
     }
   } catch(e) {
     $('#login-error').textContent = 'Connection error';
@@ -917,22 +1026,34 @@ async function enterApp() {
   $('#page-login').classList.remove('active');
   $('#page-login').style.display = 'none';
   $('#app-layout').style.display = 'flex';
-  // Show logout only when access key is configured
-  if (authKey) $('#sidebar-footer').style.display = '';
+  $('#sidebar-footer').style.display = '';
+  $('#user-display').textContent = currentUser ? currentUser.username : '';
+  if (currentUser && currentUser.role === 'admin') {
+    $('#btn-admin').style.display = '';
+  }
   showPage('projects');
+  // Trigger onboarding for first-time users
+  if (currentUser && !currentUser.hasOnboarded) {
+    setTimeout(() => startOnboarding(), 600);
+  }
 }
 
 function logout() {
-  authKey = '';
-  localStorage.removeItem('ccmobile_key');
+  authFetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+  authToken = '';
+  currentUser = null;
+  localStorage.removeItem('ccmobile_token');
+  localStorage.removeItem('ccmobile_user');
   $('#app-layout').style.display = 'none';
   $('#page-login').style.display = '';
   $('#page-login').classList.add('active');
-  $('#login-key').value = '';
+  $('#login-user').value = '';
+  $('#login-pass').value = '';
   $('#login-error').textContent = '';
 }
 
-$('#login-key').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+$('#login-user').addEventListener('keydown', e => { if (e.key === 'Enter') $('#login-pass').focus(); });
+$('#login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 
 // ========== Navigation ==========
 function showPage(id) {
@@ -953,6 +1074,8 @@ function showPage(id) {
   if (id === 'projects') {
     $('#sidebar').style.display = '';
   }
+  if (id === 'admin') { loadAdminPanel(); }
+  if (id === 'marketplace') { loadMarketplace(); }
 }
 
 function openSidebar() {
@@ -969,7 +1092,7 @@ function closeSidebar() {
 async function loadSessionList() {
   const el = $('#session-list');
   el.innerHTML = '<div class="loading">Loading...</div>';
-  const res = await authFetch(`/api/projects/${encodeURIComponent(state.currentProject)}/sessions`);
+  const res = await authFetch(`/api/projects/${encodeURIComponent(state.currentProject)}/sessions?type=${state.currentProjectType}`);
   const sessions = await res.json();
   if (sessions.length === 0) {
     el.innerHTML = '<div class="empty-sessions"><div class="icon">&#128172;</div><div>No history yet</div></div>';
@@ -1049,10 +1172,14 @@ async function loadProjects() {
   const projects = data.projects || data;
 
   const el = $('#project-list');
+  if (projects.length === 0) {
+    el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text2)">No projects yet. Create a folder in your workspace or request access to a shared project.</div>';
+    return;
+  }
   el.innerHTML = projects.map((p, i) => `
-    <div class="project-card" data-idx="${i}" data-name="${esc(p.name)}"
-      onclick="if(!sortMode) openProject('${esc(p.name)}')">
-      <div class="name">${esc(p.name)}</div>
+    <div class="project-card" data-idx="${i}" data-name="${esc(p.name)}" data-type="${p.type}"
+      onclick="if(!sortMode) openProject('${esc(p.name)}', '${p.type}')">
+      <div class="name">${esc(p.name)} ${p.type === 'shared' ? '<span class="tag git" style="font-size:10px">Shared</span>' : ''}</div>
       <div class="meta">
         ${p.hasGit ? '<span class="tag git">Git</span>' : ''}
         ${p.hasClaudeMd ? '<span class="tag claude">CLAUDE.md</span>' : ''}
@@ -1223,8 +1350,9 @@ async function doGitPush() {
 }
 
 // ========== Sessions ==========
-async function openProject(name) {
+async function openProject(name, type) {
   state.currentProject = name;
+  state.currentProjectType = type || 'personal';
   state.activeId = null;
   state.claudeSessionId = null;
   $('#sidebar-project-name').textContent = name;
@@ -1247,7 +1375,7 @@ async function newChat() {
   const res = await authFetch('/api/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectName: state.currentProject })
+    body: JSON.stringify({ projectName: state.currentProject, type: state.currentProjectType })
   });
   const session = await res.json();
   state.activeId = session.id;
@@ -1273,7 +1401,7 @@ async function resumeSession(claudeSessionId) {
   const res = await authFetch('/api/sessions/resume', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectName: state.currentProject, claudeSessionId })
+    body: JSON.stringify({ projectName: state.currentProject, claudeSessionId, type: state.currentProjectType })
   });
   const session = await res.json();
   state.activeId = session.id;
@@ -2435,19 +2563,18 @@ async function checkSetupAndInit() {
       return;
     }
 
-    // Configured — try auth
-    // Try without key first
-    const authRes = await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: '' }) });
-    if (authRes.ok) {
-      authKey = '';
-      enterApp();
-      return;
+    // Try saved token
+    if (authToken) {
+      const r = await authFetch('/api/auth/me');
+      if (r.ok) {
+        const data = await r.json();
+        currentUser = data.user;
+        localStorage.setItem('ccmobile_user', JSON.stringify(data.user));
+        enterApp();
+        return;
+      }
     }
-    // Key required — try saved key
-    if (authKey) {
-      const r = await authFetch('/api/projects');
-      if (r.ok) { enterApp(); return; }
-    }
+    // Show login
     $('#page-login').style.display = '';
   } catch {
     $('#page-login').style.display = '';
@@ -2509,6 +2636,339 @@ async function doSetup() {
     btn.disabled = false;
     btn.textContent = 'Save & Start';
   }
+}
+
+// ========== Admin Panel ==========
+async function loadAdminPanel() {
+  // Load users
+  const usersRes = await authFetch('/api/admin/users');
+  const users = await usersRes.json();
+  $('#admin-user-list').innerHTML = users.map(u => `
+    <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:6px">
+      <span style="flex:1;font-weight:500">${esc(u.username)}</span>
+      <span style="font-size:12px;color:var(--text2)">${u.role}</span>
+      <span style="font-size:11px;color:var(--text3)">${u.last_login ? 'Last: ' + formatTime(u.last_login) : 'Never logged in'}</span>
+      ${u.username !== currentUser.username ? `<button onclick="adminResetPass('${u.id}')" style="font-size:11px;padding:4px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer">Reset PW</button><button onclick="adminDeleteUser('${u.id}','${esc(u.username)}')" style="font-size:11px;padding:4px 8px;background:var(--red);border:none;border-radius:6px;color:#fff;cursor:pointer">Delete</button>` : ''}
+    </div>`).join('');
+
+  // Load shared projects
+  const projRes = await authFetch('/api/shared-projects');
+  const projects = await projRes.json();
+  $('#admin-shared-list').innerHTML = projects.map(p => `
+    <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:6px">
+      <span style="flex:1;font-weight:500">${esc(p.name)}</span>
+      <span style="font-size:12px;color:var(--text2)">${esc(p.description || '')}</span>
+      <button onclick="adminDeleteSharedProject('${p.id}','${esc(p.name)}')" style="font-size:11px;padding:4px 8px;background:var(--red);border:none;border-radius:6px;color:#fff;cursor:pointer">Delete</button>
+    </div>`).join('') || '<div style="color:var(--text3)">No shared projects</div>';
+
+  // Load access requests
+  const reqRes = await authFetch('/api/admin/access-requests');
+  const requests = await reqRes.json();
+  $('#admin-requests-list').innerHTML = requests.map(r => `
+    <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:6px">
+      <span style="flex:1"><strong>${esc(r.username)}</strong> requests access to <strong>${esc(r.project_name)}</strong></span>
+      <span style="font-size:11px;color:var(--text3)">${formatTime(r.requested_at)}</span>
+      <button onclick="adminApproveRequest('${r.id}')" style="font-size:11px;padding:4px 8px;background:var(--green);border:none;border-radius:6px;color:#fff;cursor:pointer">Approve</button>
+      <button onclick="adminRejectRequest('${r.id}')" style="font-size:11px;padding:4px 8px;background:var(--red);border:none;border-radius:6px;color:#fff;cursor:pointer">Reject</button>
+    </div>`).join('') || '<div style="color:var(--text3)">No pending requests</div>';
+
+  // Load logs dashboard
+  loadAdminStats();
+  loadAdminChatLogs();
+  loadAdminSysLogs();
+}
+
+async function adminCreateUser() {
+  const username = $('#admin-new-user').value.trim();
+  const password = $('#admin-new-pass').value.trim();
+  const role = $('#admin-new-role').value;
+  if (!username || !password) return alert('Username and password required');
+  const res = await authFetch('/api/admin/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password, role }) });
+  const data = await res.json();
+  if (!res.ok) return alert(data.error);
+  $('#admin-new-user').value = ''; $('#admin-new-pass').value = '';
+  loadAdminPanel();
+}
+
+async function adminDeleteUser(id, username) {
+  if (!confirm(`Delete user "${username}"? This cannot be undone.`)) return;
+  await authFetch(`/api/admin/users/${id}`, { method: 'DELETE' });
+  loadAdminPanel();
+}
+
+async function adminResetPass(id) {
+  const newPass = prompt('Enter new password (min 4 chars):');
+  if (!newPass || newPass.length < 4) return;
+  const res = await authFetch(`/api/admin/users/${id}/reset-password`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ newPassword: newPass }) });
+  if (res.ok) alert('Password reset successfully');
+}
+
+async function adminCreateSharedProject() {
+  const name = $('#admin-new-proj').value.trim();
+  const description = $('#admin-new-proj-desc').value.trim();
+  if (!name) return alert('Project name required');
+  const res = await authFetch('/api/admin/shared-projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, description }) });
+  const data = await res.json();
+  if (!res.ok) return alert(data.error);
+  $('#admin-new-proj').value = ''; $('#admin-new-proj-desc').value = '';
+  loadAdminPanel();
+}
+
+async function adminDeleteSharedProject(id, name) {
+  if (!confirm(`Delete shared project "${name}"? This will remove access for all users.`)) return;
+  await authFetch(`/api/admin/shared-projects/${id}`, { method: 'DELETE' });
+  loadAdminPanel();
+}
+
+async function adminApproveRequest(id) {
+  await authFetch(`/api/admin/access-requests/${id}/approve`, { method: 'POST' });
+  loadAdminPanel();
+}
+
+async function adminRejectRequest(id) {
+  await authFetch(`/api/admin/access-requests/${id}/reject`, { method: 'POST' });
+  loadAdminPanel();
+}
+
+async function loadAdminStats() {
+  const res = await authFetch('/api/admin/logs/stats');
+  const stats = await res.json();
+  if (stats.length === 0) {
+    $('#admin-stats-list').innerHTML = '<div style="color:var(--text3)">No chat data yet</div>';
+    return;
+  }
+  $('#admin-stats-list').innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr repeat(4,auto);gap:4px 12px;font-size:13px;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px">
+      <div style="font-weight:600;color:var(--text2)">User</div>
+      <div style="font-weight:600;color:var(--text2)">Chats</div>
+      <div style="font-weight:600;color:var(--text2)">Input</div>
+      <div style="font-weight:600;color:var(--text2)">Output</div>
+      <div style="font-weight:600;color:var(--text2)">Cost</div>
+      ${stats.map(s => `
+        <div>${esc(s.username)}</div>
+        <div>${s.total_chats}</div>
+        <div>${formatTokens(s.total_input_tokens)}</div>
+        <div>${formatTokens(s.total_output_tokens)}</div>
+        <div>$${(s.total_cost_usd || 0).toFixed(4)}</div>
+      `).join('')}
+    </div>`;
+  // Populate user filter dropdown
+  const sel = $('#admin-chatlog-user');
+  sel.innerHTML = '<option value="">All Users</option>' + stats.map(s => `<option value="${s.user_id}">${esc(s.username)}</option>`).join('');
+}
+
+function formatTokens(n) {
+  if (!n) return '0';
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(n);
+}
+
+async function loadAdminChatLogs() {
+  const userId = $('#admin-chatlog-user').value;
+  const url = userId ? `/api/admin/logs/chat?user_id=${userId}&limit=50` : '/api/admin/logs/chat?limit=50';
+  const res = await authFetch(url);
+  const data = await res.json();
+  if (data.logs.length === 0) {
+    $('#admin-chatlog-list').innerHTML = '<div style="color:var(--text3)">No chat logs</div>';
+    return;
+  }
+  $('#admin-chatlog-list').innerHTML = data.logs.map(l => `
+    <div style="padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:4px;font-size:13px">
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="font-weight:500">${esc(l.username)}</span>
+        <span style="color:var(--text3);font-size:11px">${formatTime(l.timestamp)}</span>
+        <span style="color:var(--text2)">${esc(l.project)}</span>
+        <span style="margin-left:auto;font-size:11px;color:var(--accent)">$${(l.cost_usd || 0).toFixed(4)}</span>
+      </div>
+      <div style="color:var(--text3);font-size:12px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc((l.message_preview || '').substring(0, 100))}</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:2px">In: ${formatTokens(l.input_tokens)} | Out: ${formatTokens(l.output_tokens)} | Cache: ${formatTokens(l.cache_read_tokens)} | ${((l.duration_ms||0)/1000).toFixed(1)}s</div>
+    </div>`).join('');
+}
+
+async function loadAdminSysLogs() {
+  const res = await authFetch('/api/admin/logs/system?limit=50');
+  const data = await res.json();
+  if (data.logs.length === 0) {
+    $('#admin-syslog-list').innerHTML = '<div style="color:var(--text3)">No system logs</div>';
+    return;
+  }
+  $('#admin-syslog-list').innerHTML = data.logs.map(l => `
+    <div style="padding:6px 12px;font-size:12px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center">
+      <span style="color:var(--text3);min-width:130px">${formatTime(l.timestamp)}</span>
+      <span style="font-weight:500;min-width:80px">${esc(l.username || '-')}</span>
+      <span style="color:var(--accent)">${esc(l.event)}</span>
+      <span style="color:var(--text2);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(l.detail || '')}</span>
+    </div>`).join('');
+}
+
+// ========== Shared Projects Marketplace ==========
+async function loadMarketplace() {
+  const res = await authFetch('/api/shared-projects');
+  const projects = await res.json();
+  const el = $('#marketplace-list');
+  if (projects.length === 0) {
+    el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text2)">No shared projects available yet.</div>';
+    return;
+  }
+  el.innerHTML = projects.map(p => {
+    let actionBtn = '';
+    if (p.myAccess === 'approved') {
+      actionBtn = '<span style="font-size:12px;color:var(--green);font-weight:600">&#10003; Approved</span>';
+    } else if (p.myAccess === 'pending') {
+      actionBtn = '<span style="font-size:12px;color:var(--orange)">&#9679; Pending</span>';
+    } else if (p.myAccess === 'rejected') {
+      actionBtn = '<span style="font-size:12px;color:var(--red)">&#10007; Rejected</span>';
+    } else {
+      actionBtn = `<button onclick="requestAccess('${p.id}')" style="font-size:12px;padding:6px 12px;background:var(--accent);color:#fff;border:none;border-radius:8px;cursor:pointer">Request Access</button>`;
+    }
+    return `
+      <div class="project-card">
+        <div class="name">${esc(p.name)}</div>
+        <div class="meta" style="margin-bottom:8px"><span style="color:var(--text2);font-size:13px">${esc(p.description || 'No description')}</span></div>
+        <div>${actionBtn}</div>
+      </div>`;
+  }).join('');
+}
+
+async function requestAccess(projectId) {
+  const res = await authFetch(`/api/shared-projects/${projectId}/request-access`, { method: 'POST' });
+  const data = await res.json();
+  if (!res.ok) alert(data.error);
+  loadMarketplace();
+}
+
+// ========== Create Project ==========
+async function openCreateProjectModal() {
+  $('#create-project-modal').classList.add('open');
+  $('#create-proj-name').value = '';
+  $('#create-proj-desc').value = '';
+  $('#create-proj-error').textContent = '';
+  document.querySelector('input[name="proj-type"][value="personal"]').checked = true;
+  toggleProjectType();
+}
+
+function closeCreateProjectModal() {
+  $('#create-project-modal').classList.remove('open');
+}
+
+function toggleProjectType() {
+  const isShared = document.querySelector('input[name="proj-type"]:checked').value === 'shared';
+  $('#create-proj-shared-section').style.display = isShared ? '' : 'none';
+  if (isShared) loadUserListForSharing();
+}
+
+async function loadUserListForSharing() {
+  const res = await authFetch('/api/users/list');
+  const users = await res.json();
+  const el = $('#create-proj-users');
+  if (users.length === 0) {
+    el.innerHTML = '<div style="color:var(--text3);font-size:13px">No other users</div>';
+    return;
+  }
+  el.innerHTML = users.map(u => `
+    <label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;cursor:pointer">
+      <input type="checkbox" value="${u.id}" class="share-user-cb">
+      <span>${esc(u.username)}</span>
+      <span style="font-size:11px;color:var(--text3)">${u.role}</span>
+    </label>
+  `).join('');
+}
+
+async function doCreateProject() {
+  const name = $('#create-proj-name').value.trim();
+  if (!name) { $('#create-proj-error').textContent = 'Project name required'; return; }
+
+  const type = document.querySelector('input[name="proj-type"]:checked').value;
+  const btn = $('#btn-create-proj');
+  btn.disabled = true;
+  $('#create-proj-error').textContent = '';
+
+  try {
+    let res;
+    if (type === 'personal') {
+      res = await authFetch('/api/projects/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+    } else {
+      const description = $('#create-proj-desc').value.trim();
+      const checkboxes = document.querySelectorAll('.share-user-cb:checked');
+      const sharedWith = [...checkboxes].map(cb => cb.value);
+      res = await authFetch('/api/projects/create-shared', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, description, sharedWith })
+      });
+    }
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    closeCreateProjectModal();
+    loadProjects();
+  } catch (e) {
+    $('#create-proj-error').textContent = e.message;
+  }
+  btn.disabled = false;
+}
+
+// ========== Onboarding Guide ==========
+const onboardSteps = [
+  {
+    title: 'Welcome to ccmobile!',
+    content: `
+      <p>This is your AI coding assistant in the browser. Here's how to get started:</p>
+      <div class="step"><span class="step-num">1</span><span class="step-text"><strong>Select a project</strong> — Click any project card to open it and start chatting with Claude.</span></div>
+      <div class="step"><span class="step-num">2</span><span class="step-text"><strong>Create a project</strong> — Click the <strong>+</strong> button (top right) to create a new private or shared project.</span></div>
+      <div class="step"><span class="step-num">3</span><span class="step-text"><strong>Chat with Claude</strong> — Type a message, Claude will read & edit your project files directly.</span></div>
+    `
+  },
+  {
+    title: 'Understanding the Interface',
+    content: `
+      <div class="step"><span class="step-num">\u2190</span><span class="step-text"><strong>Sidebar</strong> — Session history, file browser, and navigation.</span></div>
+      <div class="step"><span class="step-num">\u2295</span><span class="step-text"><strong>New Chat</strong> — Start a fresh conversation within the same project.</span></div>
+      <div class="step"><span class="step-num">\u21BA</span><span class="step-text"><strong>Rewind</strong> — Roll back code to any earlier state (undo Claude's changes).</span></div>
+      <div class="step"><span class="step-num">\u2191</span><span class="step-text"><strong>Push</strong> — Commit & push to Git right from the chat page.</span></div>
+      <p class="hint">Private projects are only visible to you. Shared projects allow team collaboration.</p>
+    `
+  }
+];
+
+let onboardIdx = 0;
+
+function startOnboarding() {
+  onboardIdx = 0;
+  renderOnboardStep();
+}
+
+function renderOnboardStep() {
+  const step = onboardSteps[onboardIdx];
+  const isLast = onboardIdx === onboardSteps.length - 1;
+  const el = $('#onboard-overlay');
+  el.style.display = 'flex';
+  el.innerHTML = `
+    <div class="onboard-card">
+      <h2>${step.title}</h2>
+      ${step.content}
+      <div class="onboard-actions">
+        <button class="btn-skip" onclick="finishOnboarding()">Skip</button>
+        <button class="btn-next" onclick="${isLast ? 'finishOnboarding()' : 'nextOnboardStep()'}">${isLast ? 'Got it!' : 'Next'}</button>
+      </div>
+    </div>
+  `;
+}
+
+function nextOnboardStep() {
+  onboardIdx++;
+  renderOnboardStep();
+}
+
+async function finishOnboarding() {
+  $('#onboard-overlay').style.display = 'none';
+  try { await authFetch('/api/auth/complete-onboarding', { method: 'POST' }); } catch {}
+  if (currentUser) currentUser.hasOnboarded = true;
+  localStorage.setItem('ccmobile_user', JSON.stringify(currentUser));
 }
 
 // Init

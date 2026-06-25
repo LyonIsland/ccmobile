@@ -52,12 +52,15 @@ module.exports = {
   // Server
   PORT: process.env.PORT || 6767,
 
-  // Optional access key
-  ACCESS_KEY: process.env.CCMOBILE_ACCESS_KEY || '',
+  // Multi-user auth
+  ADMIN_USER: process.env.CCMOBILE_ADMIN_USER || '',
+  ADMIN_PASS: process.env.CCMOBILE_ADMIN_PASS || '',
 
   // Paths
   HOME_DIR,
   PROJECT_ROOT: process.env.CCMOBILE_PROJECT_ROOT || path.join(HOME_DIR, 'projects'),
+  USER_DATA_ROOT: process.env.CCMOBILE_USER_DATA_ROOT || path.join(__dirname, 'user-data'),
+  SHARED_PROJECTS_ROOT: process.env.CCMOBILE_SHARED_PROJECTS_ROOT || path.join(__dirname, 'shared-projects'),
   CLAUDE_SESSIONS_ROOT: HOME_DIR + '/.claude/projects',
   FILE_HISTORY_ROOT: HOME_DIR + '/.claude/file-history',
 
