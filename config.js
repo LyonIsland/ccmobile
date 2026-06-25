@@ -66,6 +66,7 @@ module.exports = {
 
   // Claude CLI
   CLAUDE_CLI_PATH: findClaude(),
+  CLAUDE_MODEL: process.env.CCMOBILE_MODEL || 'opus',
 
   // Sandbox
   USE_SANDBOX: resolveSandbox(),

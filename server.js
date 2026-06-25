@@ -27,6 +27,14 @@ const USER_DATA_ROOT = config.USER_DATA_ROOT;
 const SHARED_PROJECTS_ROOT = config.SHARED_PROJECTS_ROOT;
 const CLAUDE_SESSIONS_ROOT = config.CLAUDE_SESSIONS_ROOT;
 const FILE_HISTORY_ROOT = config.FILE_HISTORY_ROOT;
+
+// Per-user session/file-history roots (Claude CLI writes to user's HOME)
+function getUserSessionsRoot(username) {
+  return path.join(USER_DATA_ROOT, username, '.claude', 'projects');
+}
+function getUserFileHistoryRoot(username) {
+  return path.join(USER_DATA_ROOT, username, '.claude', 'file-history');
+}
 const activeSessions = new Map();
 const authTokens = new Map(); // token -> { user: {id, username, role}, expiresAt }
 
@@ -326,8 +334,8 @@ function findClaudeMd(dir) {
   } catch { return null; }
 }
 
-function buildProjectInfo(fullPath, name, type) {
-  const sessionDir = path.join(CLAUDE_SESSIONS_ROOT, projectToSessionDir(fullPath));
+function buildProjectInfo(fullPath, name, type, username) {
+  const sessionDir = path.join(getUserSessionsRoot(username), projectToSessionDir(fullPath));
   let sessionCount = 0;
   if (fs.existsSync(sessionDir)) {
     sessionCount = fs.readdirSync(sessionDir).filter(f => f.endsWith('.jsonl')).length;
@@ -438,7 +446,7 @@ app.get('/api/projects', (req, res) => {
     const dirs = fs.readdirSync(personalDir, { withFileTypes: true })
       .filter(d => d.isDirectory() && !d.name.startsWith('.'));
     for (const d of dirs) {
-      projects.push(buildProjectInfo(path.join(personalDir, d.name), d.name, 'personal'));
+      projects.push(buildProjectInfo(path.join(personalDir, d.name), d.name, 'personal', username));
     }
   }
 
@@ -449,7 +457,7 @@ app.get('/api/projects', (req, res) => {
     if (hasAccess) {
       const spPath = path.join(SHARED_PROJECTS_ROOT, sp.name);
       if (fs.existsSync(spPath)) {
-        projects.push({ ...buildProjectInfo(spPath, sp.name, 'shared'), description: sp.description });
+        projects.push({ ...buildProjectInfo(spPath, sp.name, 'shared', username), description: sp.description });
       }
     }
   }
@@ -540,7 +548,7 @@ app.put('/api/projects/:name/claude-md', (req, res) => {
 // ========== Sessions API ==========
 app.get('/api/projects/:name/sessions', async (req, res) => {
   const projectPath = resolveUserProjectPath(req.user.username, req.params.name, req.query.type || 'personal');
-  const sessionDir = path.join(CLAUDE_SESSIONS_ROOT, projectToSessionDir(projectPath));
+  const sessionDir = path.join(getUserSessionsRoot(req.user.username), projectToSessionDir(projectPath));
   if (!fs.existsSync(sessionDir)) return res.json([]);
 
   const jsonlFiles = fs.readdirSync(sessionDir).filter(f => f.endsWith('.jsonl'));
@@ -586,7 +594,7 @@ app.put('/api/sessions/:sessionId/name', (req, res) => {
   }
   if (project) {
     const projectPath = resolveUserProjectPath(req.user.username, project, type || 'personal');
-    const sessionDir = path.join(CLAUDE_SESSIONS_ROOT, projectToSessionDir(projectPath));
+    const sessionDir = path.join(getUserSessionsRoot(req.user.username), projectToSessionDir(projectPath));
     const jsonlPath = path.join(sessionDir, `${sessionId}.jsonl`);
     if (fs.existsSync(jsonlPath)) {
       const titleLine = JSON.stringify({ type: 'custom-title', customTitle: trimmed || '', sessionId }) + '\n';
@@ -606,7 +614,7 @@ app.get('/api/sessions/:sessionId/messages', async (req, res) => {
   const before = req.query.before != null ? parseInt(req.query.before) : null;
 
   const projectPath = resolveUserProjectPath(req.user.username, projectName, projectType);
-  const sessionDir = path.join(CLAUDE_SESSIONS_ROOT, projectToSessionDir(projectPath));
+  const sessionDir = path.join(getUserSessionsRoot(req.user.username), projectToSessionDir(projectPath));
   const filePath = path.join(sessionDir, `${sessionId}.jsonl`);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Session not found' });
 
@@ -655,7 +663,11 @@ app.post('/api/sessions/:id/message', (req, res) => {
   if (!session) return res.status(404).json({ error: 'Session not found' });
   session.lastActive = Date.now();
 
-  const { message, images } = req.body;
+  const { message, images, model } = req.body;
+
+  // Validate model selection (only allow known aliases)
+  const ALLOWED_MODELS = ['opus', 'sonnet'];
+  const selectedModel = ALLOWED_MODELS.includes(model) ? model : config.CLAUDE_MODEL;
 
   // Save images inside project dir (visible in bwrap sandbox)
   const tempFiles = [];
@@ -686,7 +698,7 @@ app.post('/api/sessions/:id/message', (req, res) => {
     try { res.write(`data: ${JSON.stringify(data)}\n\n`); } catch { resAlive = false; }
   }
 
-  const claudeArgs = ['-p', '--output-format', 'stream-json', '--verbose'];
+  const claudeArgs = ['-p', '--output-format', 'stream-json', '--verbose', '--model', selectedModel];
   if (session.claudeSessionId) {
     claudeArgs.push('--resume', session.claudeSessionId);
   }
@@ -863,7 +875,7 @@ app.delete('/api/sessions/:sessionId/delete', (req, res) => {
   const projectType = req.query.type || 'personal';
   if (!projectName) return res.status(400).json({ error: 'project required' });
   const projectPath = resolveUserProjectPath(req.user.username, projectName, projectType);
-  const sessionDir = path.join(CLAUDE_SESSIONS_ROOT, projectToSessionDir(projectPath));
+  const sessionDir = path.join(getUserSessionsRoot(req.user.username), projectToSessionDir(projectPath));
   const jsonlPath = path.join(sessionDir, `${sessionId}.jsonl`);
   try { if (fs.existsSync(jsonlPath)) fs.unlinkSync(jsonlPath); } catch {}
   try { db.prepare('DELETE FROM session_names WHERE session_id = ?').run(sessionId); } catch {}
@@ -990,7 +1002,7 @@ app.get('/api/sessions/:sessionId/rewind-points', async (req, res) => {
   if (!projectName) return res.status(400).json({ error: 'project query param required' });
 
   const projectPath = resolveUserProjectPath(req.user.username, projectName, projectType);
-  const sessionDir = path.join(CLAUDE_SESSIONS_ROOT, projectToSessionDir(projectPath));
+  const sessionDir = path.join(getUserSessionsRoot(req.user.username), projectToSessionDir(projectPath));
   const filePath = path.join(sessionDir, `${sessionId}.jsonl`);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Session not found' });
 
@@ -1012,7 +1024,7 @@ app.post('/api/rewind', async (req, res) => {
   const projectPath = resolveUserProjectPath(req.user.username, projectName, projectType);
   if (!fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
 
-  const sessionDir = path.join(CLAUDE_SESSIONS_ROOT, projectToSessionDir(projectPath));
+  const sessionDir = path.join(getUserSessionsRoot(req.user.username), projectToSessionDir(projectPath));
   const filePath = path.join(sessionDir, `${sessionId}.jsonl`);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Session not found' });
 
@@ -1020,7 +1032,7 @@ app.post('/api/rewind', async (req, res) => {
   const snapshot = snapshotGroups.get(messageId);
   if (!snapshot) return res.status(404).json({ error: 'Snapshot not found for this message' });
 
-  const fileHistoryDir = path.join(FILE_HISTORY_ROOT, sessionId);
+  const fileHistoryDir = path.join(getUserFileHistoryRoot(req.user.username), sessionId);
   const restored = [], deleted = [], errors = [];
 
   for (const [relPath, info] of Object.entries(snapshot.trackedFileBackups || {})) {
