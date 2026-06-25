@@ -187,11 +187,22 @@ function ensureUserDirs(username) {
   for (const d of dirs) {
     if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
   }
-  // Copy global Claude credentials if user doesn't have their own
+  // Copy or refresh global Claude credentials for the user
   const globalCred = path.join(HOME_DIR, '.claude', '.credentials.json');
   const userCred = path.join(home, '.claude', '.credentials.json');
-  if (fs.existsSync(globalCred) && !fs.existsSync(userCred)) {
-    fs.copyFileSync(globalCred, userCred);
+  if (fs.existsSync(globalCred)) {
+    let needCopy = !fs.existsSync(userCred);
+    if (!needCopy) {
+      // Check if user's token has expired, refresh from global if so
+      try {
+        const cred = JSON.parse(fs.readFileSync(userCred, 'utf8'));
+        const expiresAt = cred.claudeAiOauth?.expiresAt || 0;
+        if (Date.now() > expiresAt) needCopy = true;
+      } catch { needCopy = true; }
+    }
+    if (needCopy) {
+      fs.copyFileSync(globalCred, userCred);
+    }
   }
 }
 
@@ -349,7 +360,7 @@ function buildUserSandboxArgs(username, projectDir, claudeArgs) {
     '--proc', '/proc',
     '--bind', '/tmp', '/tmp',
     '--bind', projectDir, projectDir,
-    '--bind', userClaudeDir, userClaudeDir,
+    '--bind', userHome, userHome,
     '--chdir', projectDir,
     '--share-net',
     config.CLAUDE_CLI_PATH, ...claudeArgs
