@@ -18,6 +18,8 @@ process.on('exit', (code) => { console.error('[EXIT] process exiting with code',
 
 const app = express();
 app.use(express.json({ limit: '20mb' }));
+const cookieParser = require('cookie-parser');
+app.use(cookieParser());
 
 const upload = multer({ dest: '/tmp/ccmobile-uploads/', limits: { fileSize: 300 * 1024 * 1024 }, defParamCharset: 'utf8' });
 
@@ -36,7 +38,7 @@ function getUserFileHistoryRoot(username) {
   return path.join(USER_DATA_ROOT, username, '.claude', 'file-history');
 }
 const activeSessions = new Map();
-const authTokens = new Map(); // token -> { user: {id, username, role}, expiresAt }
+const authTokens = new Map(); // in-memory cache, backed by DB
 
 // ========== Database Setup ==========
 const DB_PATH = path.join(__dirname, 'data', 'ccmobile.db');
@@ -92,6 +94,7 @@ db.exec(`
 try { db.exec(`ALTER TABLE session_names ADD COLUMN user_id TEXT`); } catch {}
 try { db.exec(`ALTER TABLE project_notes ADD COLUMN user_id TEXT`); } catch {}
 try { db.exec(`ALTER TABLE users ADD COLUMN has_onboarded INTEGER DEFAULT 0`); } catch {}
+try { db.exec(`ALTER TABLE users ADD COLUMN theme TEXT DEFAULT 'light'`); } catch {}
 
 // Logging tables
 db.exec(`
@@ -123,6 +126,14 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_syslog_user ON system_logs(user_id);
   CREATE INDEX IF NOT EXISTS idx_chatlog_time ON chat_logs(timestamp);
   CREATE INDEX IF NOT EXISTS idx_chatlog_user ON chat_logs(user_id);
+
+  CREATE TABLE IF NOT EXISTS auth_tokens (
+    token TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_auth_tokens_user ON auth_tokens(user_id);
 `);
 
 // ========== Logging Helpers ==========
@@ -155,21 +166,56 @@ function ensureDirs() {
 }
 
 // ========== Auth Helpers ==========
+const TOKEN_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
 function generateToken() {
   return crypto.randomBytes(32).toString('hex');
 }
 
 function validateToken(token) {
-  const session = authTokens.get(token);
-  if (!session) return null;
-  if (Date.now() > session.expiresAt) {
-    authTokens.delete(token);
+  if (!token) return null;
+  // Check in-memory cache first
+  let session = authTokens.get(token);
+  if (session) {
+    if (Date.now() > session.expiresAt) {
+      authTokens.delete(token);
+      db.prepare('DELETE FROM auth_tokens WHERE token = ?').run(token);
+      return null;
+    }
+    // Refresh expiry
+    session.expiresAt = Date.now() + TOKEN_EXPIRY_MS;
+    db.prepare('UPDATE auth_tokens SET expires_at = ? WHERE token = ?').run(session.expiresAt, token);
+    return session.user;
+  }
+  // Fallback: check DB (e.g. after server restart)
+  const row = db.prepare('SELECT at.token, at.expires_at, u.id, u.username, u.role FROM auth_tokens at JOIN users u ON at.user_id = u.id WHERE at.token = ?').get(token);
+  if (!row) return null;
+  if (Date.now() > row.expires_at) {
+    db.prepare('DELETE FROM auth_tokens WHERE token = ?').run(token);
     return null;
   }
-  // Refresh expiry on each use
-  session.expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000;
-  return session.user;
+  // Restore to in-memory cache
+  const user = { id: row.id, username: row.username, role: row.role };
+  const newExpiry = Date.now() + TOKEN_EXPIRY_MS;
+  authTokens.set(token, { user, expiresAt: newExpiry });
+  db.prepare('UPDATE auth_tokens SET expires_at = ? WHERE token = ?').run(newExpiry, token);
+  return user;
 }
+
+function deleteUserTokens(userId) {
+  const rows = db.prepare('SELECT token FROM auth_tokens WHERE user_id = ?').all(userId);
+  for (const r of rows) authTokens.delete(r.token);
+  db.prepare('DELETE FROM auth_tokens WHERE user_id = ?').run(userId);
+}
+
+// Cleanup expired tokens periodically
+setInterval(() => {
+  const now = Date.now();
+  db.prepare('DELETE FROM auth_tokens WHERE expires_at < ?').run(now);
+  for (const [token, session] of authTokens) {
+    if (now > session.expiresAt) authTokens.delete(token);
+  }
+}, 60 * 60 * 1000); // every hour
 
 // ========== User Data Helpers ==========
 function getUserHome(username) {
@@ -255,14 +301,24 @@ app.post('/api/auth/login', (req, res) => {
   // Ensure user directories
   ensureUserDirs(username);
 
-  // Generate token
+  // Generate token and persist
   const token = generateToken();
+  const expiresAt = Date.now() + TOKEN_EXPIRY_MS;
   authTokens.set(token, {
     user: { id: user.id, username: user.username, role: user.role },
-    expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000
+    expiresAt
+  });
+  db.prepare('INSERT INTO auth_tokens (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)').run(token, user.id, expiresAt, new Date().toISOString());
+
+  // Set httpOnly cookie for auto-login
+  res.cookie('ccmobile_token', token, {
+    httpOnly: true,
+    maxAge: TOKEN_EXPIRY_MS,
+    sameSite: 'lax',
+    path: '/'
   });
 
-  res.json({ ok: true, token, user: { id: user.id, username: user.username, role: user.role, hasOnboarded: !!user.has_onboarded } });
+  res.json({ ok: true, token, user: { id: user.id, username: user.username, role: user.role, hasOnboarded: !!user.has_onboarded, theme: user.theme || 'light' } });
   logSystem('login', user.id, user.username, `Login successful (role: ${user.role})`);
 });
 
@@ -271,29 +327,43 @@ app.use('/api', (req, res, next) => {
   // Allow login endpoint without token
   if (req.path === '/auth/login') return next();
 
+  // Try Authorization header first, then cookie
   const authHeader = req.headers['authorization'] || '';
-  const token = authHeader.replace('Bearer ', '');
+  let token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  if (!token && req.cookies) token = req.cookies.ccmobile_token || '';
   const user = validateToken(token);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
   req.user = user;
+  req.authToken = token;
   next();
 });
 
 // ========== Auth endpoints (token required) ==========
 app.post('/api/auth/logout', (req, res) => {
-  const token = (req.headers['authorization'] || '').replace('Bearer ', '');
-  authTokens.delete(token);
+  const token = req.authToken;
+  if (token) {
+    authTokens.delete(token);
+    db.prepare('DELETE FROM auth_tokens WHERE token = ?').run(token);
+  }
+  res.clearCookie('ccmobile_token', { path: '/' });
   logSystem('logout', req.user.id, req.user.username, null);
   res.json({ ok: true });
 });
 
 app.get('/api/auth/me', (req, res) => {
-  const user = db.prepare('SELECT has_onboarded FROM users WHERE id = ?').get(req.user.id);
-  res.json({ user: { ...req.user, hasOnboarded: !!(user && user.has_onboarded) } });
+  const user = db.prepare('SELECT has_onboarded, theme FROM users WHERE id = ?').get(req.user.id);
+  res.json({ user: { ...req.user, hasOnboarded: !!(user && user.has_onboarded), theme: (user && user.theme) || 'light' } });
 });
 
 app.post('/api/auth/complete-onboarding', (req, res) => {
   db.prepare('UPDATE users SET has_onboarded = 1 WHERE id = ?').run(req.user.id);
+  res.json({ ok: true });
+});
+
+app.put('/api/auth/theme', (req, res) => {
+  const { theme } = req.body;
+  if (theme !== 'light' && theme !== 'dark') return res.status(400).json({ error: 'Invalid theme' });
+  db.prepare('UPDATE users SET theme = ? WHERE id = ?').run(theme, req.user.id);
   res.json({ ok: true });
 });
 
@@ -1154,9 +1224,7 @@ app.delete('/api/admin/users/:id', requireAdmin, (req, res) => {
   db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
   db.prepare('DELETE FROM project_access WHERE user_id = ?').run(req.params.id);
   // Invalidate tokens for this user
-  for (const [token, session] of authTokens) {
-    if (session.user.id === req.params.id) authTokens.delete(token);
-  }
+  deleteUserTokens(req.params.id);
   logSystem('admin.delete_user', req.user.id, req.user.username, `Deleted user "${user.username}"`);
   res.json({ ok: true });
 });

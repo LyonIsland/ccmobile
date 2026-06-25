@@ -133,9 +133,15 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 
 /* ====== Page: Projects (grid) ====== */
 #page-projects .projects-header {
-  padding: 24px 32px 16px; display: flex; align-items: center; gap: 16px; flex-shrink: 0;
+  padding: 24px 32px 0; display: flex; flex-direction: column; gap: 0; flex-shrink: 0;
+}
+#page-projects .projects-header .projects-title-row {
+  display: flex; align-items: center; gap: 16px;
 }
 #page-projects .projects-header h1 { font-size: 22px; font-weight: 700; flex: 1; letter-spacing: -0.3px; }
+#page-projects .projects-toolbar {
+  display: flex; align-items: center; gap: 8px; padding: 12px 0 16px; flex-wrap: wrap;
+}
 .projects-grid {
   flex: 1; overflow-y: auto; padding: 4px 32px 32px;
   display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -473,7 +479,8 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   .sidebar.mobile-open { left: 0; }
   .chat-header .back-btn { display: flex; }
   .chat-header .menu-btn { display: flex; }
-  #page-projects .projects-header { padding: 20px 16px 12px; }
+  #page-projects .projects-header { padding: 20px 16px 0; }
+  #page-projects .projects-toolbar { padding: 8px 0 12px; }
   .projects-grid { padding: 0 16px 16px; grid-template-columns: 1fr; }
   .messages { padding: 16px 12px 8px; }
   .input-area { padding: 8px 12px; }
@@ -739,7 +746,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .onboard-actions .btn-skip { background: var(--surface2); color: var(--text2); }
 .onboard-actions .btn-next { background: var(--accent); color: #fff; }
 </style>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css">
+<link id="hljs-theme" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css">
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/core.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/javascript.min.js"></script>
@@ -800,7 +807,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   <div class="sidebar" id="sidebar">
     <div class="sidebar-header">
       <span class="sidebar-brand">ccmobile</span>
-      <button class="icon-btn" id="btn-theme" onclick="toggleTheme()" title="Toggle theme">&#9788;</button>
+      <button class="icon-btn btn-theme-toggle" onclick="toggleTheme()" title="Toggle theme">&#9788;</button>
     </div>
 
     <div class="project-selector">
@@ -845,9 +852,18 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <!-- Page: Projects -->
     <div id="page-projects" class="page active">
       <div class="projects-header">
-        <h1>Projects</h1>
-        <button class="btn-action" onclick="openCreateProjectModal()" title="New Project" style="font-size:18px;font-weight:700;line-height:1">+</button>
-        <button class="btn-action" id="btn-sort" onclick="toggleSortMode()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5h10"/><path d="M11 9h7"/><path d="M11 13h4"/><path d="M3 17l3 3 3-3"/><path d="M6 18V4"/></svg></button>
+        <div class="projects-title-row">
+          <h1>Projects</h1>
+          <button class="btn-action" onclick="openCreateProjectModal()" title="New Project" style="font-size:18px;font-weight:700;line-height:1">+</button>
+        </div>
+        <div class="projects-toolbar">
+          <button class="btn-action" id="btn-sort" onclick="toggleSortMode()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5h10"/><path d="M11 9h7"/><path d="M11 13h4"/><path d="M3 17l3 3 3-3"/><path d="M6 18V4"/></svg> Sort</button>
+          <button class="btn-action" onclick="showPage('marketplace')" title="Shared Projects"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg> Shared</button>
+          <button class="btn-action" id="btn-admin-projects" onclick="showPage('admin')" title="Admin Panel" style="display:none"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15 1.65 1.65 0 003 14.08V14a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V21a2 2 0 010 4h.09"/></svg> Admin</button>
+          <span style="flex:1"></span>
+          <button class="btn-action btn-theme-toggle" onclick="toggleTheme()" title="Toggle theme">&#9788;</button>
+          <button class="btn-action danger" onclick="logout()" title="Logout"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg> Logout</button>
+        </div>
       </div>
       <div class="projects-grid scroll-area" id="project-list"></div>
     </div>
@@ -858,6 +874,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
         <button class="back-btn" onclick="showPage('projects')">&#8592;</button>
         <button class="menu-btn" onclick="openSidebar()">&#9776;</button>
         <h1 id="chat-title">Chat</h1>
+        <button class="btn-action" onclick="newChat()" title="New Chat" style="display:flex;align-items:center;gap:4px;padding:6px 12px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg><span class="new-chat-label">New</span></button>
         <button class="btn-action" onclick="openGitModal()">Push</button>
       </div>
       <div class="messages" id="messages"></div>
@@ -1035,13 +1052,34 @@ const $ = s => document.querySelector(s);
 function applyTheme(theme) {
   document.documentElement.classList.toggle('light', theme === 'light');
   localStorage.setItem('ccmobile_theme', theme);
-  const btn = $('#btn-theme');
-  if (btn) btn.innerHTML = theme === 'light' ? '&#9788;' : '&#9790;';
+  // Switch highlight.js theme
+  const hljsLink = document.getElementById('hljs-theme');
+  if (hljsLink) {
+    hljsLink.href = theme === 'light'
+      ? 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css'
+      : 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css';
+  }
+  // Sun icon in dark mode (click to go light), Moon icon in light mode (click to go dark)
+  const icon = theme === 'light' ? '&#9790;' : '<span style="font-size:1.3em;line-height:1">&#9788;</span>';
+  const title = theme === 'light' ? 'Switch to Dark' : 'Switch to Light';
+  document.querySelectorAll('.btn-theme-toggle').forEach(btn => {
+    btn.innerHTML = icon;
+    btn.title = title;
+  });
 }
 function toggleTheme() {
-  applyTheme(document.documentElement.classList.contains('light') ? 'dark' : 'light');
+  const newTheme = document.documentElement.classList.contains('light') ? 'dark' : 'light';
+  applyTheme(newTheme);
+  // Sync to server if logged in
+  if (authToken) {
+    authFetch('/api/auth/theme', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ theme: newTheme })
+    }).catch(() => {});
+  }
 }
-applyTheme(localStorage.getItem('ccmobile_theme') || 'dark');
+applyTheme(localStorage.getItem('ccmobile_theme') || 'light');
 
 let authToken = localStorage.getItem('ccmobile_token') || '';
 let currentUser = JSON.parse(localStorage.getItem('ccmobile_user') || 'null');
@@ -1112,6 +1150,11 @@ async function enterApp() {
   $('#user-display').textContent = currentUser ? currentUser.username : '';
   if (currentUser && currentUser.role === 'admin') {
     $('#btn-admin').style.display = '';
+    $('#btn-admin-projects').style.display = '';
+  }
+  // Apply user's saved theme preference
+  if (currentUser && currentUser.theme) {
+    applyTheme(currentUser.theme);
   }
   showPage('projects');
   // Trigger onboarding for first-time users
@@ -1126,6 +1169,8 @@ function logout() {
   currentUser = null;
   localStorage.removeItem('ccmobile_token');
   localStorage.removeItem('ccmobile_user');
+  // Clear cookie client-side as backup
+  document.cookie = 'ccmobile_token=; path=/; max-age=0';
   $('#app-layout').style.display = 'none';
   $('#page-login').style.display = '';
   $('#page-login').classList.add('active');
@@ -1446,8 +1491,21 @@ async function openProject(name, type) {
   $('#ft-body').style.display = 'none';
   $('#ft-body').innerHTML = '';
   closeClaudeMdPanel();
+
+  // Try to resume most recent session instead of always creating new
+  try {
+    const res = await authFetch(`/api/projects/${encodeURIComponent(name)}/sessions?type=${type || 'personal'}`);
+    const sessions = await res.json();
+    if (sessions.length > 0) {
+      // Resume the most recent session (first in list, sorted by lastTimestamp desc)
+      await resumeSession(sessions[0].sessionId);
+      loadSessionList();
+      return;
+    }
+  } catch {}
+
+  // No existing sessions — create new chat
   await newChat();
-  // On desktop, auto-load session list in sidebar
   loadSessionList();
 }
 
@@ -2720,17 +2778,31 @@ async function checkSetupAndInit() {
       return;
     }
 
-    // Try saved token
-    if (authToken) {
-      const r = await authFetch('/api/auth/me');
+    // Try saved token or cookie auto-login
+    // (cookie is sent automatically by browser, /api/auth/me will validate it)
+    const tryToken = authToken || true; // always try — cookie might work even without localStorage token
+    try {
+      const headers = authToken ? { 'Authorization': 'Bearer ' + authToken } : {};
+      const r = await fetch('/api/auth/me', { headers, credentials: 'same-origin' });
       if (r.ok) {
         const data = await r.json();
         currentUser = data.user;
+        // If we didn't have a localStorage token, save from the response
+        if (!authToken && data.token) {
+          authToken = data.token;
+          localStorage.setItem('ccmobile_token', data.token);
+        }
         localStorage.setItem('ccmobile_user', JSON.stringify(data.user));
         enterApp();
         return;
       }
-    }
+    } catch {}
+    // Token invalid/expired — silently clear without calling logout()
+    authToken = '';
+    currentUser = null;
+    localStorage.removeItem('ccmobile_token');
+    localStorage.removeItem('ccmobile_user');
+
     // Show login
     $('#page-login').style.display = '';
   } catch {
