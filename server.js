@@ -77,6 +77,11 @@ db.exec(`
     name TEXT NOT NULL,
     user_id TEXT
   );
+  CREATE TABLE IF NOT EXISTS session_codex_ids (
+    claude_session_id TEXT PRIMARY KEY,
+    codex_session_id TEXT,
+    user_id TEXT
+  );
   CREATE TABLE IF NOT EXISTS project_notes (
     id TEXT PRIMARY KEY,
     project TEXT NOT NULL,
@@ -93,6 +98,21 @@ db.exec(`
 // Add user_id columns if not exist (migration for existing DBs)
 try { db.exec(`ALTER TABLE session_names ADD COLUMN user_id TEXT`); } catch {}
 try { db.exec(`ALTER TABLE project_notes ADD COLUMN user_id TEXT`); } catch {}
+// Migration: create session_codex_ids table if not exist (for older DBs)
+try { db.exec(`CREATE TABLE IF NOT EXISTS session_codex_ids (claude_session_id TEXT PRIMARY KEY, codex_session_id TEXT, user_id TEXT)`); } catch {}
+// Migration: allow NULL codex_session_id for proactive pairing (existing DBs with NOT NULL)
+try {
+  const tblInfo = db.pragma('table_info(session_codex_ids)');
+  const col = tblInfo.find(c => c.name === 'codex_session_id');
+  if (col && col.notnull === 1) {
+    db.exec(`
+      CREATE TABLE session_codex_ids_tmp (claude_session_id TEXT PRIMARY KEY, codex_session_id TEXT, user_id TEXT);
+      INSERT INTO session_codex_ids_tmp SELECT * FROM session_codex_ids;
+      DROP TABLE session_codex_ids;
+      ALTER TABLE session_codex_ids_tmp RENAME TO session_codex_ids;
+    `);
+  }
+} catch {}
 try { db.exec(`ALTER TABLE users ADD COLUMN has_onboarded INTEGER DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE users ADD COLUMN theme TEXT DEFAULT 'light'`); } catch {}
 
@@ -237,6 +257,7 @@ function ensureUserDirs(username) {
     path.join(home, '.claude'),
     path.join(home, '.claude', 'projects'),
     path.join(home, '.claude', 'file-history'),
+    path.join(home, '.codex'),
   ];
   for (const d of dirs) {
     if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
@@ -258,6 +279,22 @@ function ensureUserDirs(username) {
       fs.copyFileSync(globalCred, userCred);
     }
   }
+  // Copy or refresh global Codex auth for the user
+  const globalCodexAuth = path.join(HOME_DIR, '.codex', 'auth.json');
+  const userCodexAuth = path.join(home, '.codex', 'auth.json');
+  if (fs.existsSync(globalCodexAuth)) {
+    let needCopy = !fs.existsSync(userCodexAuth);
+    if (!needCopy) {
+      try {
+        const auth = JSON.parse(fs.readFileSync(userCodexAuth, 'utf8'));
+        // If no tokens or access_token is missing, re-copy
+        if (!auth.tokens?.access_token) needCopy = true;
+      } catch { needCopy = true; }
+    }
+    if (needCopy) {
+      fs.copyFileSync(globalCodexAuth, userCodexAuth);
+    }
+  }
 }
 
 // ========== Check if Claude CLI is authenticated ==========
@@ -272,16 +309,31 @@ function isClaudeAuthed() {
 
 // ========== Setup API (no auth required) ==========
 app.get('/setup/status', (req, res) => {
-  const claudeCliFound = fs.existsSync(config.CLAUDE_CLI_PATH);
-  const claudeAuthed = claudeCliFound && isClaudeAuthed();
+  const backend = config.CLI_BACKEND;
+  let cliFound, cliAuthed, cliPath;
+  if (backend === 'codex') {
+    cliPath = config.CODEX_CLI_PATH;
+    cliFound = fs.existsSync(cliPath);
+    cliAuthed = cliFound; // Codex auth checked at runtime via CODEX_API_KEY or login
+  } else {
+    cliPath = config.CLAUDE_CLI_PATH;
+    cliFound = fs.existsSync(cliPath);
+    cliAuthed = cliFound && isClaudeAuthed();
+  }
   const userCount = db.prepare('SELECT COUNT(*) as cnt FROM users').get().cnt;
+  // Report both backend availabilities for per-session switching
+  const claudeAvailable = fs.existsSync(config.CLAUDE_CLI_PATH);
+  const codexAvailable = fs.existsSync(config.CODEX_CLI_PATH);
   res.json({
-    configured: config.HAS_ENV && claudeAuthed && userCount > 0,
-    claudeCli: config.CLAUDE_CLI_PATH,
-    claudeCliFound,
-    claudeAuthed,
+    configured: config.HAS_ENV && cliAuthed && userCount > 0,
+    claudeCli: cliPath,
+    claudeCliFound: cliFound,
+    claudeAuthed: cliAuthed,
     sandbox: config.USE_SANDBOX,
-    userCount
+    userCount,
+    backend,
+    claudeAvailable,
+    codexAvailable
   });
 });
 
@@ -394,7 +446,8 @@ app.use(express.static('application/public'));
 // ========== Helper Functions ==========
 
 function projectToSessionDir(projectPath) {
-  return projectPath.replace(/\//g, '-').replace(/^-/, '-');
+  // Claude CLI replaces both '/' and '_' with '-' when creating session directories
+  return projectPath.replace(/[/_]/g, '-').replace(/^-/, '-');
 }
 
 function findClaudeMd(dir) {
@@ -419,7 +472,7 @@ function buildProjectInfo(fullPath, name, type, username) {
 }
 
 // Build bwrap sandbox args for a user + project
-function buildUserSandboxArgs(username, projectDir, claudeArgs) {
+function buildUserSandboxArgs(username, projectDir, cliPath, cliArgs) {
   const userHome = getUserHome(username);
   const userClaudeDir = getUserClaudeDir(username);
 
@@ -441,13 +494,19 @@ function buildUserSandboxArgs(username, projectDir, claudeArgs) {
     '--bind', userHome, userHome,
     '--chdir', projectDir,
     '--share-net',
-    config.CLAUDE_CLI_PATH, ...claudeArgs
+    cliPath, ...cliArgs
   ];
   return args;
 }
 
 // Resolve project path for a user (personal or shared)
 function resolveUserProjectPath(username, projectName, projectType) {
+  if (!projectName || typeof projectName !== 'string') {
+    return null;
+  }
+  if (!username || typeof username !== 'string') {
+    return null;
+  }
   if (projectType === 'shared') {
     return path.join(SHARED_PROJECTS_ROOT, projectName);
   }
@@ -478,7 +537,7 @@ function parseSessionJSONL(filePath) {
         if (obj.type === 'user' && !obj.isMeta) {
           let content = obj.message?.content || '';
           if (Array.isArray(content)) content = content.find(b => b.type === 'text')?.text || '';
-          if (typeof content === 'string' && !content.startsWith('<') && content.length > 2) {
+          if (typeof content === 'string' && !content.startsWith('<') && content.trim().length > 0) {
             userMessages.set(obj.uuid, { content: content.substring(0, 120), timestamp: obj.timestamp });
             allMessages.push({ role: 'user', content, ts: obj.timestamp, uuid: obj.uuid });
           }
@@ -501,6 +560,71 @@ function parseSessionJSONL(filePath) {
     });
     rl.on('close', () => resolve({ userMessages, snapshotGroups, allMessages, customTitle }));
   });
+}
+
+function getSessionJSONLPath(username, projectPath, sessionId, createDir = false) {
+  if (!sessionId) return null;
+  const sessionDir = path.join(getUserSessionsRoot(username), projectToSessionDir(projectPath));
+  if (createDir && !fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
+  return path.join(sessionDir, `${sessionId}.jsonl`);
+}
+
+function readSessionTranscriptForPrompt(filePath, maxChars = 60000) {
+  if (!filePath || !fs.existsSync(filePath)) return '';
+  const turns = [];
+  for (const line of fs.readFileSync(filePath, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const obj = JSON.parse(line);
+      if (obj.type === 'user' && !obj.isMeta) {
+        let content = obj.message?.content || '';
+        if (Array.isArray(content)) content = content.find(b => b.type === 'text')?.text || '';
+        if (typeof content === 'string' && content.trim()) turns.push(`User: ${content.trim()}`);
+      } else if (obj.type === 'assistant' && obj.message?.content) {
+        let text = '';
+        for (const block of obj.message.content) {
+          if (block.type === 'text' && block.text) text += block.text;
+        }
+        if (text.trim()) turns.push(`Assistant: ${text.trim()}`);
+      }
+    } catch {}
+  }
+  const transcript = turns.join('\n\n');
+  if (transcript.length <= maxChars) return transcript;
+  const headChars = Math.min(20000, Math.floor(maxChars / 3));
+  const tailChars = maxChars - headChars;
+  return [
+    transcript.slice(0, headChars),
+    '\n\n[...middle of this conversation omitted to fit context...]\n\n',
+    transcript.slice(-tailChars)
+  ].join('');
+}
+
+function appendCodexTranscript(session, userText, assistantText) {
+  if (!session?.username || !session?.projectPath || !session?.claudeSessionId) return;
+  if (!assistantText || !assistantText.trim()) return;
+  const filePath = getSessionJSONLPath(session.username, session.projectPath, session.claudeSessionId, true);
+  const now = new Date();
+  const userUuid = crypto.randomUUID();
+  const assistantUuid = crypto.randomUUID();
+  const lines = [
+    {
+      type: 'user',
+      uuid: userUuid,
+      timestamp: now.toISOString(),
+      message: { role: 'user', content: userText || '' }
+    },
+    {
+      type: 'assistant',
+      uuid: assistantUuid,
+      parentUuid: userUuid,
+      timestamp: new Date(now.getTime() + 1).toISOString(),
+      message: { role: 'assistant', content: [{ type: 'text', text: assistantText }] },
+      ccmobileBackend: 'codex',
+      codexSessionId: session.codexSessionId || null
+    }
+  ];
+  fs.appendFileSync(filePath, lines.map(line => JSON.stringify(line)).join('\n') + '\n');
 }
 
 // ========== Projects API ==========
@@ -648,7 +772,13 @@ app.get('/api/projects/:name/sessions', async (req, res) => {
   if (sessions.length) {
     const nameRows = db.prepare('SELECT session_id, name FROM session_names WHERE session_id IN (' + sessions.map(() => '?').join(',') + ')').all(...sessions.map(s => s.sessionId));
     const nameMap = Object.fromEntries(nameRows.map(r => [r.session_id, r.name]));
-    for (const s of sessions) s.customName = nameMap[s.sessionId] || s.customTitle || null;
+    // Load codex session IDs for each session
+    const codexRows = db.prepare('SELECT claude_session_id, codex_session_id FROM session_codex_ids WHERE claude_session_id IN (' + sessions.map(() => '?').join(',') + ')').all(...sessions.map(s => s.sessionId));
+    const codexMap = Object.fromEntries(codexRows.map(r => [r.claude_session_id, r.codex_session_id]));
+    for (const s of sessions) {
+      s.customName = nameMap[s.sessionId] || s.customTitle || null;
+      s.codexSessionId = codexMap[s.sessionId] || null;
+    }
   }
   res.json(sessions);
 });
@@ -699,32 +829,46 @@ app.get('/api/sessions/:sessionId/messages', async (req, res) => {
 // Create a new chat session
 app.post('/api/sessions', (req, res) => {
   const { projectName, type } = req.body;
+  if (!projectName) return res.status(400).json({ error: 'projectName is required' });
   const projectType = type || 'personal';
   const projectPath = resolveUserProjectPath(req.user.username, projectName, projectType);
-  if (!fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
+  if (!projectPath || !fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
 
   const id = crypto.randomUUID();
-  activeSessions.set(id, { claudeSessionId: null, projectPath, projectName, projectType, username: req.user.username, lastActive: Date.now() });
+  activeSessions.set(id, { ccmobileSessionId: crypto.randomUUID(), claudeSessionId: null, codexSessionId: null, projectPath, projectName, projectType, username: req.user.username, lastActive: Date.now() });
   res.json({ id, projectPath, projectName });
 });
 
-// Resume an existing claude session
+// Resume an existing session (claude or codex)
 app.post('/api/sessions/resume', (req, res) => {
-  const { projectName, claudeSessionId, type } = req.body;
+  const { projectName, claudeSessionId, codexSessionId, type } = req.body;
+  if (!projectName) return res.status(400).json({ error: 'projectName is required' });
   const projectType = type || 'personal';
   const projectPath = resolveUserProjectPath(req.user.username, projectName, projectType);
-  if (!fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
+  if (!projectPath || !fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
 
+  // Load codexSessionId from DB if not provided but claudeSessionId is given
+  let effectiveCodexId = codexSessionId || null;
+  if (claudeSessionId && !effectiveCodexId) {
+    try {
+      const row = db.prepare('SELECT codex_session_id FROM session_codex_ids WHERE claude_session_id = ?').get(claudeSessionId);
+      if (row) effectiveCodexId = row.codex_session_id;
+    } catch {}
+  }
+
+  // Check if there's already an active running session for this session ID
   for (const [existingId, s] of activeSessions) {
-    if (s.claudeSessionId === claudeSessionId && s.username === req.user.username && s.childProcess && !s.childProcess.killed) {
+    const matchClaude = claudeSessionId && s.claudeSessionId === claudeSessionId;
+    const matchCodex = effectiveCodexId && s.codexSessionId === effectiveCodexId;
+    if ((matchClaude || matchCodex) && s.username === req.user.username && s.childProcess && !s.childProcess.killed) {
       s.lastActive = Date.now();
-      return res.json({ id: existingId, claudeSessionId, projectPath, projectName, running: true });
+      return res.json({ id: existingId, claudeSessionId: s.claudeSessionId, codexSessionId: s.codexSessionId, projectPath, projectName, running: true });
     }
   }
 
   const id = crypto.randomUUID();
-  activeSessions.set(id, { claudeSessionId, projectPath, projectName, projectType, username: req.user.username, lastActive: Date.now() });
-  res.json({ id, claudeSessionId, projectPath, projectName, running: false });
+  activeSessions.set(id, { ccmobileSessionId: claudeSessionId || crypto.randomUUID(), claudeSessionId: claudeSessionId || null, codexSessionId: effectiveCodexId, projectPath, projectName, projectType, username: req.user.username, lastActive: Date.now() });
+  res.json({ id, claudeSessionId: claudeSessionId || null, codexSessionId: effectiveCodexId, projectPath, projectName, running: false });
 });
 
 // Send message and stream response via SSE
@@ -733,11 +877,20 @@ app.post('/api/sessions/:id/message', (req, res) => {
   if (!session) return res.status(404).json({ error: 'Session not found' });
   session.lastActive = Date.now();
 
-  const { message, images, model } = req.body;
+  const { message, images, model, effort, backend: reqBackend } = req.body;
+  const backend = (reqBackend === 'codex' || reqBackend === 'claude') ? reqBackend : config.CLI_BACKEND; // per-session override
 
-  // Validate model selection (only allow known aliases)
-  const ALLOWED_MODELS = ['opus', 'sonnet'];
-  const selectedModel = ALLOWED_MODELS.includes(model) ? model : config.CLAUDE_MODEL;
+  // Validate model selection based on backend
+  let selectedModel;
+  let selectedEffort;
+  if (backend === 'codex') {
+    selectedModel = config.CODEX_MODEL;
+    const ALLOWED_EFFORTS = ['low', 'medium', 'high'];
+    selectedEffort = ALLOWED_EFFORTS.includes((effort || '').toLowerCase()) ? effort.toLowerCase() : config.CODEX_EFFORT;
+  } else {
+    const ALLOWED_MODELS = ['opus', 'sonnet'];
+    selectedModel = ALLOWED_MODELS.includes(model) ? model : config.CLAUDE_MODEL;
+  }
 
   // Save images inside project dir (visible in bwrap sandbox)
   const tempFiles = [];
@@ -768,36 +921,96 @@ app.post('/api/sessions/:id/message', (req, res) => {
     try { res.write(`data: ${JSON.stringify(data)}\n\n`); } catch { resAlive = false; }
   }
 
-  const claudeArgs = ['-p', '--output-format', 'stream-json', '--verbose', '--model', selectedModel];
-  if (session.claudeSessionId) {
-    claudeArgs.push('--resume', session.claudeSessionId);
-  }
-  claudeArgs.push('--dangerously-skip-permissions');
-
   let child;
   const username = session.username;
-  if (config.USE_SANDBOX) {
-    const bwrapArgs = buildUserSandboxArgs(username, session.projectPath, claudeArgs);
-    console.log(`[spawn] bwrap sandbox for ${username}@${session.projectPath}`);
-    child = spawn(config.BWRAP_PATH, bwrapArgs, {
-      env: { ...process.env, HOME: getUserHome(username) },
-      stdio: ['pipe', 'pipe', 'pipe'],
-      detached: true
-    });
+  const userHome = getUserHome(username);
+
+  if (backend === 'codex') {
+    // ===== Codex CLI backend =====
+    // Ensure user dirs + auth credentials exist before spawn
+    ensureUserDirs(username);
+
+    if (!session.claudeSessionId) {
+      session.claudeSessionId = session.ccmobileSessionId || crypto.randomUUID();
+    }
+
+    const priorHistoryPath = getSessionJSONLPath(username, session.projectPath, session.claudeSessionId, false);
+    const priorTranscript = readSessionTranscriptForPrompt(priorHistoryPath);
+    if (priorTranscript) {
+      prompt = [
+        'Previous conversation context from the currently selected ccmobile conversation:',
+        priorTranscript,
+        '',
+        'Use only that conversation as prior chat context. Ignore any unrelated Codex thread memory.',
+        'Answer the latest user message below.',
+        '',
+        prompt
+      ].join('\n');
+    }
+
+    // Use ccmobile JSONL as the source of truth for chat history. Starting a fresh
+    // Codex exec avoids stale or mismatched Codex threads leaking another session.
+    const codexArgs = ['exec', '--json', '--sandbox', 'danger-full-access', '--skip-git-repo-check', '-C', session.projectPath];
+    if (selectedModel) codexArgs.push('--model', selectedModel);
+    if (selectedEffort) codexArgs.push('-c', `model_reasoning_effort="${selectedEffort}"`);
+    if (tempFiles.length > 0) {
+      codexArgs.push('--image', tempFiles.join(','));
+    }
+    codexArgs.push(prompt);
+
+    if (config.USE_SANDBOX) {
+      const bwrapArgs = buildUserSandboxArgs(username, session.projectPath, config.CODEX_CLI_PATH, codexArgs);
+      console.log(`[spawn] bwrap sandbox (codex) for ${username}@${session.projectPath}`);
+      child = spawn(config.BWRAP_PATH, bwrapArgs, {
+        env: { ...process.env, HOME: userHome, CODEX_HOME: path.join(userHome, '.codex') },
+        stdio: ['pipe', 'pipe', 'pipe'],
+        detached: true
+      });
+    } else {
+      console.log(`[spawn] direct codex for ${username}@${session.projectPath}`);
+      child = spawn(config.CODEX_CLI_PATH, codexArgs, {
+        cwd: session.projectPath,
+        env: { ...process.env, HOME: userHome, CODEX_HOME: path.join(userHome, '.codex') },
+        stdio: ['pipe', 'pipe', 'pipe'],
+        detached: true
+      });
+    }
   } else {
-    console.log(`[spawn] direct (no sandbox) for ${username}@${session.projectPath}`);
-    child = spawn(config.CLAUDE_CLI_PATH, claudeArgs, {
-      cwd: session.projectPath,
-      env: { ...process.env, HOME: getUserHome(username) },
-      stdio: ['pipe', 'pipe', 'pipe'],
-      detached: true
-    });
+    // ===== Claude CLI backend (default) =====
+    const claudeArgs = ['-p', '--output-format', 'stream-json', '--verbose', '--model', selectedModel];
+    if (session.claudeSessionId) {
+      claudeArgs.push('--resume', session.claudeSessionId);
+    }
+    claudeArgs.push('--dangerously-skip-permissions');
+
+    if (config.USE_SANDBOX) {
+      const bwrapArgs = buildUserSandboxArgs(username, session.projectPath, config.CLAUDE_CLI_PATH, claudeArgs);
+      console.log(`[spawn] bwrap sandbox (claude) for ${username}@${session.projectPath}`);
+      child = spawn(config.BWRAP_PATH, bwrapArgs, {
+        env: { ...process.env, HOME: userHome },
+        stdio: ['pipe', 'pipe', 'pipe'],
+        detached: true
+      });
+    } else {
+      console.log(`[spawn] direct claude for ${username}@${session.projectPath}`);
+      child = spawn(config.CLAUDE_CLI_PATH, claudeArgs, {
+        cwd: session.projectPath,
+        env: { ...process.env, HOME: userHome },
+        stdio: ['pipe', 'pipe', 'pipe'],
+        detached: true
+      });
+    }
   }
 
   session.childProcess = child;
 
-  child.stdin.write(prompt);
-  child.stdin.end();
+  // For Claude, write prompt to stdin; for Codex, prompt is in args
+  if (backend !== 'codex') {
+    child.stdin.write(prompt);
+    child.stdin.end();
+  } else {
+    child.stdin.end();
+  }
 
   function cleanupTempFiles() {
     for (const f of tempFiles) {
@@ -824,46 +1037,122 @@ app.post('/api/sessions/:id/message', (req, res) => {
       if (!line.trim()) continue;
       try {
         const evt = JSON.parse(line);
-        if (evt.type === 'system' && evt.subtype === 'init') {
-          session.claudeSessionId = evt.session_id;
-          sseSend({ type: 'init', sessionId: evt.session_id });
-        }
-        else if (evt.type === 'assistant' && evt.message?.content) {
-          for (const block of evt.message.content) {
-            if (block.type === 'text') {
-              fullText += block.text;
-              sseSend({ type: 'text', text: block.text });
-            } else if (block.type === 'tool_use') {
-              sseSend({ type: 'tool_use', name: block.name, input: block.input });
+
+        if (backend === 'codex') {
+          // ===== Codex JSONL event parsing =====
+          if (evt.type === 'thread.started') {
+            session.codexSessionId = evt.thread_id;
+            // Persist codex session ID mapping to DB (update existing row or insert new)
+            if (session.claudeSessionId) {
+              try { db.prepare('INSERT OR REPLACE INTO session_codex_ids (claude_session_id, codex_session_id, user_id) VALUES (?, ?, ?)').run(session.claudeSessionId, evt.thread_id, req.user.id); } catch {}
+            }
+            sseSend({ type: 'init', sessionId: evt.thread_id, historySessionId: session.claudeSessionId, backend: 'codex' });
+          }
+          else if (evt.type === 'item.started' && evt.item) {
+            if (evt.item.type === 'command_execution') {
+              sseSend({ type: 'tool_use', name: 'command', input: { command: evt.item.command } });
+            } else if (evt.item.type === 'file_change') {
+              sseSend({ type: 'tool_use', name: 'file_edit', input: { file: evt.item.file, status: 'started' } });
             }
           }
-        }
-        else if (evt.type === 'result') {
-          session.claudeSessionId = evt.session_id;
-          if (evt.result && !fullText) fullText = evt.result;
-          session._lastCost = evt.total_cost_usd;
-          session._lastDuration = evt.duration_ms;
-          session._lastUsage = evt.usage || {};
-          sseSend({ type: 'done', text: evt.result, cost: evt.total_cost_usd, duration: evt.duration_ms });
+          else if (evt.type === 'item.completed' && evt.item) {
+            if (evt.item.type === 'agent_message') {
+              const text = evt.item.text || '';
+              fullText += text;
+              sseSend({ type: 'text', text });
+            } else if (evt.item.type === 'command_execution') {
+              sseSend({ type: 'tool_use', name: 'command', input: { command: evt.item.command, exit_code: evt.item.exit_code } });
+            } else if (evt.item.type === 'file_change') {
+              sseSend({ type: 'tool_use', name: 'file_edit', input: { file: evt.item.file, status: 'completed' } });
+            }
+          }
+          else if (evt.type === 'turn.completed') {
+            const usage = evt.usage || {};
+            session._lastUsage = {
+              input_tokens: usage.input_tokens || 0,
+              output_tokens: usage.output_tokens || 0,
+              cache_read_input_tokens: usage.cached_input_tokens || 0
+            };
+            sseSend({ type: 'done', text: fullText, cost: null, duration: null });
+          }
+          else if (evt.type === 'error') {
+            sseSend({ type: 'error', text: evt.message || JSON.stringify(evt) });
+          }
+        } else {
+          // ===== Claude stream-json event parsing =====
+          if (evt.type === 'system' && evt.subtype === 'init') {
+            session.claudeSessionId = evt.session_id;
+            // Always persist/update the mapping row — pair claude session with codex (codex may be NULL at this point)
+            try { db.prepare('INSERT OR REPLACE INTO session_codex_ids (claude_session_id, codex_session_id, user_id) VALUES (?, ?, ?)').run(evt.session_id, session.codexSessionId || null, req.user.id); } catch {}
+            sseSend({ type: 'init', sessionId: evt.session_id, backend: 'claude' });
+          }
+          else if (evt.type === 'assistant' && evt.message?.content) {
+            for (const block of evt.message.content) {
+              if (block.type === 'text') {
+                fullText += block.text;
+                sseSend({ type: 'text', text: block.text });
+              } else if (block.type === 'tool_use') {
+                sseSend({ type: 'tool_use', name: block.name, input: block.input });
+              }
+            }
+          }
+          else if (evt.type === 'result') {
+            session.claudeSessionId = evt.session_id;
+            // Always persist/update the mapping row — ensure claude↔codex pairing stays in sync
+            if (evt.session_id) {
+              try { db.prepare('INSERT OR REPLACE INTO session_codex_ids (claude_session_id, codex_session_id, user_id) VALUES (?, ?, ?)').run(evt.session_id, session.codexSessionId || null, req.user.id); } catch {}
+            }
+            if (evt.result && !fullText) fullText = evt.result;
+            session._lastCost = evt.total_cost_usd;
+            session._lastDuration = evt.duration_ms;
+            session._lastUsage = evt.usage || {};
+            sseSend({ type: 'done', text: evt.result, cost: evt.total_cost_usd, duration: evt.duration_ms });
+          }
         }
       } catch {}
     }
   });
 
+  let resumeFailed = false;
   child.stderr.on('data', (chunk) => {
     const errText = chunk.toString();
-    console.error('[claude stderr]', errText);
-    if (errText.trim()) sseSend({ type: 'error', text: errText });
+    console.error(`[${backend} stderr]`, errText);
+    // For codex, stderr is progress info; only send actual errors
+    if (backend === 'codex') {
+      // Detect resume failure (session expired or not found)
+      if (errText.includes('thread/resume') || errText.includes('no rollout found') || errText.includes('thread not found')) {
+        resumeFailed = true;
+        sseSend({ type: 'error', text: 'Session expired. Will start a new session on next message.', code: 'SESSION_EXPIRED' });
+      } else if (errText.includes('Error') || errText.includes('error:') || errText.includes('Not inside a trusted directory')) {
+        sseSend({ type: 'error', text: errText });
+      }
+    } else {
+      if (errText.trim()) sseSend({ type: 'error', text: errText });
+    }
   });
 
   child.on('close', (code, signal) => {
-    console.log(`[claude exit] code=${code}, signal=${signal}, text length=${fullText.length}`);
+    console.log(`[${backend} exit] code=${code}, signal=${signal}, text length=${fullText.length}`);
     session.childProcess = null;
     cleanupTempFiles();
+    // If resume failed, clear the stale session ID so next request starts fresh
+    if (resumeFailed) {
+      if (backend === 'codex' && session.codexSessionId) {
+        console.log(`[codex] Clearing expired session ${session.codexSessionId} for ${session.username}@${session.projectName}`);
+        session.codexSessionId = null;
+      } else if (backend === 'claude' && session.claudeSessionId) {
+        console.log(`[claude] Clearing expired session ${session.claudeSessionId} for ${session.username}@${session.projectName}`);
+        session.claudeSessionId = null;
+      }
+    }
     session.lastResult = { text: fullText, cost: session._lastCost, duration: session._lastDuration };
+    if (backend === 'codex' && !resumeFailed) {
+      try { appendCodexTranscript(session, message || 'Please look at the attached image(s).', fullText); } catch (e) { console.error('[codex history write failed]', e.message); }
+    }
     // Log chat with token usage
+    const activeSessionId = (backend === 'codex') ? session.codexSessionId : session.claudeSessionId;
     const usage = session._lastUsage || {};
-    logChat(req.user.id, req.user.username, session.projectName, session.projectType, session.claudeSessionId, prompt, {
+    logChat(req.user.id, req.user.username, session.projectName, session.projectType, activeSessionId, prompt, {
       inputTokens: usage.input_tokens || 0,
       outputTokens: usage.output_tokens || 0,
       cacheReadTokens: usage.cache_read_input_tokens || 0,
@@ -949,10 +1238,176 @@ app.delete('/api/sessions/:sessionId/delete', (req, res) => {
   const jsonlPath = path.join(sessionDir, `${sessionId}.jsonl`);
   try { if (fs.existsSync(jsonlPath)) fs.unlinkSync(jsonlPath); } catch {}
   try { db.prepare('DELETE FROM session_names WHERE session_id = ?').run(sessionId); } catch {}
+  try { db.prepare('DELETE FROM session_codex_ids WHERE claude_session_id = ?').run(sessionId); } catch {}
   for (const [id, s] of activeSessions) {
-    if (s.claudeSessionId === sessionId) { activeSessions.delete(id); break; }
+    if (s.claudeSessionId === sessionId || s.codexSessionId === sessionId) { activeSessions.delete(id); break; }
   }
   res.json({ ok: true });
+});
+
+// ========== File Preview/Download ==========
+// Check if a file exists (by absolute path within project)
+app.get('/api/file-check', (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath) return res.status(400).json({ exists: false });
+
+  // Security: only allow files within user's project directories or shared projects
+  const userHome = getUserHome(req.user.username);
+  const isUserFile = filePath.startsWith(userHome + '/');
+  const isSharedFile = filePath.startsWith(SHARED_PROJECTS_ROOT + '/');
+  if (!isUserFile && !isSharedFile) return res.json({ exists: false });
+
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.isFile()) {
+      return res.json({ exists: true, size: stat.size, name: path.basename(filePath) });
+    }
+  } catch {}
+  res.json({ exists: false });
+});
+
+// Serve a file for preview/download
+app.get('/api/file-preview', (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath) return res.status(400).json({ error: 'path required' });
+
+  const userHome = getUserHome(req.user.username);
+  const isUserFile = filePath.startsWith(userHome + '/');
+  const isSharedFile = filePath.startsWith(SHARED_PROJECTS_ROOT + '/');
+  if (!isUserFile && !isSharedFile) return res.status(403).json({ error: 'Access denied' });
+
+  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  const ext = path.extname(filePath).toLowerCase();
+  const MIME_MAP = {
+    '.html': 'text/html', '.htm': 'text/html',
+    '.css': 'text/css', '.js': 'application/javascript',
+    '.json': 'application/json', '.xml': 'application/xml',
+    '.txt': 'text/plain', '.md': 'text/plain', '.log': 'text/plain',
+    '.csv': 'text/csv',
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp',
+    '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
+    '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
+    '.pdf': 'application/pdf',
+    '.zip': 'application/zip', '.gz': 'application/gzip',
+  };
+  const contentType = MIME_MAP[ext] || 'application/octet-stream';
+  const inline = ['.html', '.htm', '.txt', '.md', '.log', '.csv', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.mp4', '.webm', '.pdf'].includes(ext);
+
+  res.setHeader('Content-Type', contentType);
+  res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${encodeURIComponent(path.basename(filePath))}"`);
+  fs.createReadStream(filePath).pipe(res);
+});
+
+// Return a snippet (first N chars) of a text file for inline preview
+app.get('/api/file-snippet', (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath) return res.status(400).json({ error: 'path required' });
+
+  const userHome = getUserHome(req.user.username);
+  const isUserFile = filePath.startsWith(userHome + '/');
+  const isSharedFile = filePath.startsWith(SHARED_PROJECTS_ROOT + '/');
+  if (!isUserFile && !isSharedFile) return res.status(403).json({ error: 'Access denied' });
+
+  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  const ext = path.extname(filePath).toLowerCase();
+  const textExts = ['.md', '.markdown', '.txt', '.log', '.json', '.yaml', '.yml', '.toml', '.ini', '.conf',
+    '.js', '.ts', '.jsx', '.tsx', '.py', '.go', '.java', '.c', '.cpp', '.rs', '.rb', '.php', '.sh',
+    '.sql', '.html', '.htm', '.css', '.xml', '.csv'];
+  if (!textExts.includes(ext)) {
+    return res.json({ snippet: null, previewable: false });
+  }
+
+  // HTML files get larger snippet for proper rendering
+  const defaultMax = ['.html', '.htm'].includes(ext) ? 4000 : 800;
+  const maxChars = Math.min(parseInt(req.query.max) || defaultMax, 8000);
+
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(maxChars);
+    const bytesRead = fs.readSync(fd, buf, 0, maxChars, 0);
+    fs.closeSync(fd);
+    const content = buf.slice(0, bytesRead).toString('utf8');
+    res.json({ snippet: content, previewable: true, ext: ext });
+  } catch (e) {
+    res.status(500).json({ error: 'Read failed' });
+  }
+});
+
+// Force-download a file (always attachment)
+app.get('/api/file-download', (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath) return res.status(400).json({ error: 'path required' });
+
+  const userHome = getUserHome(req.user.username);
+  const isUserFile = filePath.startsWith(userHome + '/');
+  const isSharedFile = filePath.startsWith(SHARED_PROJECTS_ROOT + '/');
+  if (!isUserFile && !isSharedFile) return res.status(403).json({ error: 'Access denied' });
+
+  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  const ext = path.extname(filePath).toLowerCase();
+  const MIME_MAP = {
+    '.html': 'text/html', '.htm': 'text/html',
+    '.css': 'text/css', '.js': 'application/javascript',
+    '.json': 'application/json', '.xml': 'application/xml',
+    '.txt': 'text/plain', '.md': 'text/plain', '.log': 'text/plain',
+    '.csv': 'text/csv',
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp',
+    '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
+    '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
+    '.pdf': 'application/pdf',
+    '.zip': 'application/zip', '.gz': 'application/gzip',
+  };
+  const contentType = MIME_MAP[ext] || 'application/octet-stream';
+  res.setHeader('Content-Type', contentType);
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(path.basename(filePath))}"`);
+  fs.createReadStream(filePath).pipe(res);
+});
+
+// ========== Project File Download (by relative path) ==========
+app.get('/api/projects/:name/download', (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath) return res.status(400).json({ error: 'path required' });
+
+  const projectPath = resolveUserProjectPath(req.user.username, req.params.name, req.query.type || 'personal');
+  if (!fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
+
+  const absPath = path.join(projectPath, filePath);
+  // Security: ensure resolved path is within project directory
+  if (!absPath.startsWith(projectPath + '/')) return res.status(403).json({ error: 'Access denied' });
+
+  if (!fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  const ext = path.extname(absPath).toLowerCase();
+  const MIME_MAP = {
+    '.html': 'text/html', '.htm': 'text/html',
+    '.css': 'text/css', '.js': 'application/javascript',
+    '.json': 'application/json', '.xml': 'application/xml',
+    '.txt': 'text/plain', '.md': 'text/plain', '.log': 'text/plain',
+    '.csv': 'text/csv',
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp',
+    '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
+    '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
+    '.pdf': 'application/pdf',
+    '.zip': 'application/zip', '.gz': 'application/gzip',
+  };
+  const contentType = MIME_MAP[ext] || 'application/octet-stream';
+  res.setHeader('Content-Type', contentType);
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(path.basename(absPath))}"`);
+  fs.createReadStream(absPath).pipe(res);
 });
 
 // ========== File Tree & Upload ==========
@@ -1375,16 +1830,28 @@ console.log('  ╔════════════════════�
 console.log('  ║           ccmobile starting            ║');
 console.log('  ╚══════════════════════════════════════╝');
 console.log('');
-if (fs.existsSync(config.CLAUDE_CLI_PATH)) {
-  if (isClaudeAuthed()) {
-    console.log(`  Claude CLI : ${config.CLAUDE_CLI_PATH} ✓ (authenticated)`);
+console.log(`  Backend    : ${config.CLI_BACKEND.toUpperCase()}`);
+if (config.CLI_BACKEND === 'codex') {
+  if (fs.existsSync(config.CODEX_CLI_PATH)) {
+    console.log(`  Codex CLI  : ${config.CODEX_CLI_PATH} ✓`);
+    console.log(`  Codex Model: ${config.CODEX_MODEL}`);
+    console.log(`  Codex Effort: ${config.CODEX_EFFORT}`);
   } else {
-    console.log(`  Claude CLI : ${config.CLAUDE_CLI_PATH} ✓ (not logged in)`);
-    console.log(`               Run: claude   to authenticate`);
+    console.log(`  Codex CLI  : not found ✗`);
+    console.log(`               Install: npm install -g @openai/codex`);
   }
 } else {
-  console.log(`  Claude CLI : not found ✗`);
-  console.log(`               Install: npm install -g @anthropic-ai/claude-code`);
+  if (fs.existsSync(config.CLAUDE_CLI_PATH)) {
+    if (isClaudeAuthed()) {
+      console.log(`  Claude CLI : ${config.CLAUDE_CLI_PATH} ✓ (authenticated)`);
+    } else {
+      console.log(`  Claude CLI : ${config.CLAUDE_CLI_PATH} ✓ (not logged in)`);
+      console.log(`               Run: claude   to authenticate`);
+    }
+  } else {
+    console.log(`  Claude CLI : not found ✗`);
+    console.log(`               Install: npm install -g @anthropic-ai/claude-code`);
+  }
 }
 console.log(`  Sandbox    : ${config.USE_SANDBOX ? 'enabled (bwrap)' : 'disabled (direct mode)'}`);
 console.log(`  User data  : ${USER_DATA_ROOT}`);

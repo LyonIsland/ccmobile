@@ -29,6 +29,15 @@ function findClaude() {
   return 'claude'; // fallback — will fail at spawn with a clear error
 }
 
+// Auto-detect Codex CLI path
+function findCodex() {
+  if (process.env.CCMOBILE_CODEX_CLI) return process.env.CCMOBILE_CODEX_CLI;
+  const candidates = ['/usr/local/bin/codex', '/usr/bin/codex', path.join(HOME_DIR, '.local/bin/codex')];
+  for (const p of candidates) { if (fs.existsSync(p)) return p; }
+  try { return execSync('which codex', { encoding: 'utf8' }).trim(); } catch {}
+  return 'codex'; // fallback
+}
+
 // Auto-detect bwrap
 function findBwrap() {
   if (process.env.CCMOBILE_BWRAP_PATH) return process.env.CCMOBILE_BWRAP_PATH;
@@ -48,6 +57,9 @@ function resolveSandbox() {
   return !!BWRAP_PATH;
 }
 
+// CLI backend: 'claude' (default) | 'codex'
+const CLI_BACKEND = (process.env.CCMOBILE_CLI_BACKEND || 'claude').toLowerCase();
+
 module.exports = {
   // Server
   PORT: process.env.PORT || 6767,
@@ -64,9 +76,17 @@ module.exports = {
   CLAUDE_SESSIONS_ROOT: HOME_DIR + '/.claude/projects',
   FILE_HISTORY_ROOT: HOME_DIR + '/.claude/file-history',
 
+  // CLI Backend selection
+  CLI_BACKEND,
+
   // Claude CLI
   CLAUDE_CLI_PATH: findClaude(),
   CLAUDE_MODEL: process.env.CCMOBILE_MODEL || 'opus',
+
+  // Codex CLI
+  CODEX_CLI_PATH: findCodex(),
+  CODEX_MODEL: process.env.CCMOBILE_CODEX_MODEL || 'gpt-5.5',
+  CODEX_EFFORT: process.env.CCMOBILE_CODEX_EFFORT || 'high',  // reasoning effort: low, medium, high
 
   // Sandbox
   USE_SANDBOX: resolveSandbox(),
