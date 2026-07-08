@@ -17,11 +17,26 @@ process.on('SIGHUP', () => { console.error('[SIGNAL] SIGHUP received'); });
 process.on('exit', (code) => { console.error('[EXIT] process exiting with code', code); });
 
 const app = express();
-app.use(express.json({ limit: '20mb' }));
+app.disable('x-powered-by');
+app.set('trust proxy', config.TRUST_PROXY);
+
+const JSON_BODY_LIMIT = process.env.CCMOBILE_JSON_LIMIT || '40mb';
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const MAX_TOTAL_ATTACHMENT_BYTES = 60 * 1024 * 1024;
+const MAX_ATTACHMENTS_PER_MESSAGE = 10;
+
+app.use(express.json({ limit: JSON_BODY_LIMIT }));
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  next();
+});
 const cookieParser = require('cookie-parser');
 app.use(cookieParser());
 
-const upload = multer({ dest: '/tmp/ccmobile-uploads/', limits: { fileSize: 300 * 1024 * 1024 }, defParamCharset: 'utf8' });
+const upload = multer({ dest: '/tmp/ccmobile-uploads/', limits: { fileSize: MAX_UPLOAD_BYTES, files: 20 }, defParamCharset: 'utf8' });
 
 // ========== Constants ==========
 const HOME_DIR = config.HOME_DIR;
@@ -82,6 +97,12 @@ db.exec(`
     codex_session_id TEXT,
     user_id TEXT
   );
+  CREATE TABLE IF NOT EXISTS standalone_session_projects (
+    session_id TEXT PRIMARY KEY,
+    project_name TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS project_notes (
     id TEXT PRIMARY KEY,
     project TEXT NOT NULL,
@@ -93,6 +114,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_notes_project ON project_notes(project);
   CREATE INDEX IF NOT EXISTS idx_access_project ON project_access(project_id);
   CREATE INDEX IF NOT EXISTS idx_access_user ON project_access(user_id);
+  CREATE INDEX IF NOT EXISTS idx_standalone_user_project ON standalone_session_projects(user_id, project_name);
 `);
 
 // Add user_id columns if not exist (migration for existing DBs)
@@ -100,6 +122,8 @@ try { db.exec(`ALTER TABLE session_names ADD COLUMN user_id TEXT`); } catch {}
 try { db.exec(`ALTER TABLE project_notes ADD COLUMN user_id TEXT`); } catch {}
 // Migration: create session_codex_ids table if not exist (for older DBs)
 try { db.exec(`CREATE TABLE IF NOT EXISTS session_codex_ids (claude_session_id TEXT PRIMARY KEY, codex_session_id TEXT, user_id TEXT)`); } catch {}
+try { db.exec(`CREATE TABLE IF NOT EXISTS standalone_session_projects (session_id TEXT PRIMARY KEY, project_name TEXT NOT NULL, user_id TEXT NOT NULL, created_at TEXT NOT NULL)`); } catch {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_standalone_user_project ON standalone_session_projects(user_id, project_name)`); } catch {}
 // Migration: allow NULL codex_session_id for proactive pairing (existing DBs with NOT NULL)
 try {
   const tblInfo = db.pragma('table_info(session_codex_ids)');
@@ -338,14 +362,54 @@ app.get('/setup/status', (req, res) => {
 });
 
 // ========== Auth API (no token required) ==========
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_BLOCK_MS = 15 * 60 * 1000;
+const LOGIN_MAX_FAILURES = 8;
+const loginFailures = new Map();
+
+function loginRateKey(req, username) {
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  return `${ip}:${String(username || '').toLowerCase()}`;
+}
+
+function isLoginBlocked(key) {
+  const entry = loginFailures.get(key);
+  if (!entry) return false;
+  if (entry.blockedUntil && entry.blockedUntil > Date.now()) return true;
+  if (entry.firstFailure + LOGIN_WINDOW_MS < Date.now()) {
+    loginFailures.delete(key);
+    return false;
+  }
+  return false;
+}
+
+function recordLoginFailure(key) {
+  const now = Date.now();
+  const entry = loginFailures.get(key);
+  if (!entry || entry.firstFailure + LOGIN_WINDOW_MS < now) {
+    loginFailures.set(key, { count: 1, firstFailure: now, blockedUntil: 0 });
+    return;
+  }
+  entry.count += 1;
+  if (entry.count >= LOGIN_MAX_FAILURES) entry.blockedUntil = now + LOGIN_BLOCK_MS;
+}
+
 app.post('/api/auth/login', (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
 
+  const rateKey = loginRateKey(req, username);
+  if (isLoginBlocked(rateKey)) {
+    logSystem('login_rate_limited', null, username, `Too many failed attempts from ${req.ip || req.socket?.remoteAddress || 'unknown'}`);
+    return res.status(429).json({ error: 'Too many failed login attempts. Try again later.' });
+  }
+
   const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
   if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+    recordLoginFailure(rateKey);
     return res.status(401).json({ error: 'Invalid username or password' });
   }
+  loginFailures.delete(rateKey);
 
   // Update last_login
   db.prepare('UPDATE users SET last_login = ? WHERE id = ?').run(new Date().toISOString(), user.id);
@@ -363,8 +427,10 @@ app.post('/api/auth/login', (req, res) => {
   db.prepare('INSERT INTO auth_tokens (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)').run(token, user.id, expiresAt, new Date().toISOString());
 
   // Set httpOnly cookie for auto-login
+  const isHttpsRequest = req.secure || req.headers['x-forwarded-proto'] === 'https';
   res.cookie('ccmobile_token', token, {
     httpOnly: true,
+    secure: isHttpsRequest,
     maxAge: TOKEN_EXPIRY_MS,
     sameSite: 'lax',
     path: '/'
@@ -471,6 +537,20 @@ function buildProjectInfo(fullPath, name, type, username) {
   };
 }
 
+function standaloneProjectNameFromDate(date = new Date()) {
+  const pad = n => String(n).padStart(2, '0');
+  const stamp = `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+  return `chat-${stamp}-${crypto.randomBytes(2).toString('hex')}`;
+}
+
+function getStandaloneProjectRows(userId) {
+  return db.prepare('SELECT session_id, project_name FROM standalone_session_projects WHERE user_id = ?').all(userId);
+}
+
+function isStandaloneProject(userId, projectName) {
+  return !!db.prepare('SELECT 1 FROM standalone_session_projects WHERE user_id = ? AND project_name = ? LIMIT 1').get(userId, projectName);
+}
+
 // Build bwrap sandbox args for a user + project
 function buildUserSandboxArgs(username, projectDir, cliPath, cliArgs) {
   const userHome = getUserHome(username);
@@ -500,17 +580,65 @@ function buildUserSandboxArgs(username, projectDir, cliPath, cliArgs) {
 }
 
 // Resolve project path for a user (personal or shared)
-function resolveUserProjectPath(username, projectName, projectType) {
-  if (!projectName || typeof projectName !== 'string') {
-    return null;
-  }
-  if (!username || typeof username !== 'string') {
-    return null;
-  }
+function isPathInside(root, target) {
+  const rootPath = path.resolve(root);
+  const targetPath = path.resolve(target);
+  const rel = path.relative(rootPath, targetPath);
+  return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function resolveInside(root, unsafePath) {
+  const resolved = path.resolve(root, unsafePath || '');
+  return isPathInside(root, resolved) ? resolved : null;
+}
+
+function safeProjectName(projectName) {
+  if (!projectName || typeof projectName !== 'string') return null;
+  const trimmed = projectName.trim();
+  if (!trimmed || trimmed === '.' || trimmed === '..') return null;
+  if (path.basename(trimmed) !== trimmed) return null;
+  if (!/^[a-zA-Z0-9_.-]+$/.test(trimmed)) return null;
+  return trimmed;
+}
+
+function resolveUserProjectPath(user, projectName, projectType) {
+  const username = typeof user === 'string' ? user : user?.username;
+  const userId = typeof user === 'string' ? null : user?.id;
+  const role = typeof user === 'string' ? 'user' : user?.role;
+  const projName = safeProjectName(projectName);
+  if (!projName || !username) return null;
+
   if (projectType === 'shared') {
-    return path.join(SHARED_PROJECTS_ROOT, projectName);
+    const project = db.prepare('SELECT id FROM shared_projects WHERE name = ?').get(projName);
+    if (!project) return null;
+    if (role !== 'admin' && (!userId || !userHasSharedAccess(userId, project.id))) return null;
+    const sharedPath = path.resolve(SHARED_PROJECTS_ROOT, projName);
+    return isPathInside(SHARED_PROJECTS_ROOT, sharedPath) ? sharedPath : null;
   }
-  return path.join(getUserProjectsDir(username), projectName);
+
+  const personalRoot = getUserProjectsDir(username);
+  const personalPath = path.resolve(personalRoot, projName);
+  return isPathInside(personalRoot, personalPath) ? personalPath : null;
+}
+
+function isAllowedFilePath(user, filePath) {
+  if (!filePath || typeof filePath !== 'string') return false;
+  const target = path.resolve(filePath);
+  const userHome = getUserHome(user.username);
+  if (isPathInside(userHome, target)) return true;
+  if (!isPathInside(SHARED_PROJECTS_ROOT, target)) return false;
+
+  const rel = path.relative(path.resolve(SHARED_PROJECTS_ROOT), target);
+  const projectName = rel.split(path.sep)[0];
+  const project = safeProjectName(projectName) && db.prepare('SELECT id FROM shared_projects WHERE name = ?').get(projectName);
+  if (!project) return false;
+  return user.role === 'admin' || userHasSharedAccess(user.id, project.id);
+}
+
+function safeUploadFileName(name) {
+  const base = path.basename(name || '').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 160);
+  if (!base || base === '.' || base === '..') return null;
+  return base;
 }
 
 // Check if user has access to a shared project
@@ -567,6 +695,96 @@ function getSessionJSONLPath(username, projectPath, sessionId, createDir = false
   const sessionDir = path.join(getUserSessionsRoot(username), projectToSessionDir(projectPath));
   if (createDir && !fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
   return path.join(sessionDir, `${sessionId}.jsonl`);
+}
+
+async function collectProjectSessions(user, projectName, projectType, projectPath, options = {}) {
+  const sessionDir = path.join(getUserSessionsRoot(user.username), projectToSessionDir(projectPath));
+  if (!fs.existsSync(sessionDir)) return [];
+
+  const standaloneRows = getStandaloneProjectRows(user.id);
+  const standaloneBySession = new Map(standaloneRows.map(r => [r.session_id, r.project_name]));
+  const standaloneProject = isStandaloneProject(user.id, projectName);
+  const sessions = [];
+
+  for (const file of fs.readdirSync(sessionDir).filter(f => f.endsWith('.jsonl'))) {
+    const sessionId = file.replace('.jsonl', '');
+    const filePath = path.join(sessionDir, file);
+    const stat = fs.statSync(filePath);
+    const rowProject = standaloneBySession.get(sessionId);
+    const standalone = standaloneProject || rowProject === projectName;
+    if (options.onlyStandalone && !standalone) continue;
+    if (options.excludeStandalone && standalone) continue;
+    try {
+      const { allMessages, customTitle } = await parseSessionJSONL(filePath);
+      if (allMessages.length === 0) continue;
+      const firstUser = allMessages.find(m => m.role === 'user');
+      const last = allMessages[allMessages.length - 1];
+      sessions.push({
+        sessionId,
+        firstMessage: firstUser ? firstUser.content.substring(0, 120) : null,
+        customTitle: customTitle || null,
+        lastTimestamp: last.ts || stat.mtime.toISOString(),
+        messageCount: allMessages.filter(m => m.role === 'user').length,
+        mtime: stat.mtime.getTime(),
+        projectName,
+        projectType,
+        standalone
+      });
+    } catch {}
+  }
+
+  sessions.sort((a, b) => b.mtime - a.mtime);
+  if (sessions.length) {
+    const placeholders = sessions.map(() => '?').join(',');
+    const ids = sessions.map(s => s.sessionId);
+    const nameRows = db.prepare(`SELECT session_id, name FROM session_names WHERE session_id IN (${placeholders})`).all(...ids);
+    const nameMap = Object.fromEntries(nameRows.map(r => [r.session_id, r.name]));
+    const codexRows = db.prepare(`SELECT claude_session_id, codex_session_id FROM session_codex_ids WHERE claude_session_id IN (${placeholders})`).all(...ids);
+    const codexMap = Object.fromEntries(codexRows.map(r => [r.claude_session_id, r.codex_session_id]));
+    for (const s of sessions) {
+      s.customName = nameMap[s.sessionId] || s.customTitle || null;
+      s.codexSessionId = codexMap[s.sessionId] || null;
+    }
+  }
+  return sessions;
+}
+
+async function collectAllSessionOverview(user) {
+  const projects = [];
+  const standalone = [];
+  const personalDir = getUserProjectsDir(user.username);
+
+  if (fs.existsSync(personalDir)) {
+    const dirs = fs.readdirSync(personalDir, { withFileTypes: true })
+      .filter(d => d.isDirectory() && !d.name.startsWith('.'));
+    for (const d of dirs) {
+      const projectPath = path.join(personalDir, d.name);
+      const projectSessions = await collectProjectSessions(user, d.name, 'personal', projectPath);
+      if (isStandaloneProject(user.id, d.name)) {
+        standalone.push(...projectSessions.map(s => ({ ...s, standalone: true })));
+      } else {
+        projects.push({ name: d.name, type: 'personal', sessions: projectSessions.filter(s => !s.standalone) });
+      }
+    }
+  }
+
+  const sharedProjects = db.prepare('SELECT * FROM shared_projects').all();
+  for (const sp of sharedProjects) {
+    const hasAccess = user.role === 'admin' || userHasSharedAccess(user.id, sp.id);
+    const projectPath = path.join(SHARED_PROJECTS_ROOT, sp.name);
+    if (!hasAccess || !fs.existsSync(projectPath)) continue;
+    const sessions = await collectProjectSessions(user, sp.name, 'shared', projectPath, { excludeStandalone: true });
+    projects.push({ name: sp.name, type: 'shared', sessions, description: sp.description });
+  }
+
+  projects.sort((a, b) => {
+    const am = a.sessions[0]?.mtime || 0;
+    const bm = b.sessions[0]?.mtime || 0;
+    return bm - am || a.name.localeCompare(b.name);
+  });
+  standalone.sort((a, b) => b.mtime - a.mtime);
+  const all = [...projects.flatMap(p => p.sessions), ...standalone].sort((a, b) => b.mtime - a.mtime);
+  return { latest: all[0] || null, projects, standalone, sessions: all };
 }
 
 function readSessionTranscriptForPrompt(filePath, maxChars = 60000) {
@@ -640,6 +858,7 @@ app.get('/api/projects', (req, res) => {
     const dirs = fs.readdirSync(personalDir, { withFileTypes: true })
       .filter(d => d.isDirectory() && !d.name.startsWith('.'));
     for (const d of dirs) {
+      if (isStandaloneProject(userId, d.name)) continue;
       projects.push(buildProjectInfo(path.join(personalDir, d.name), d.name, 'personal', username));
     }
   }
@@ -663,7 +882,7 @@ app.get('/api/projects', (req, res) => {
 app.post('/api/projects/create', (req, res) => {
   const { name } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Project name required' });
-  const projName = name.trim().replace(/[^a-zA-Z0-9_\-\.]/g, '-');
+  const projName = safeProjectName(name.trim().replace(/[^a-zA-Z0-9_\-\.]/g, '-'));
   if (!projName) return res.status(400).json({ error: 'Invalid project name' });
 
   const userProjDir = getUserProjectsDir(req.user.username);
@@ -679,7 +898,7 @@ app.post('/api/projects/create', (req, res) => {
 app.post('/api/projects/create-shared', (req, res) => {
   const { name, description, sharedWith } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Project name required' });
-  const projName = name.trim().replace(/[^a-zA-Z0-9_\-\.]/g, '-');
+  const projName = safeProjectName(name.trim().replace(/[^a-zA-Z0-9_\-\.]/g, '-'));
   if (!projName) return res.status(400).json({ error: 'Invalid project name' });
 
   const existing = db.prepare('SELECT id FROM shared_projects WHERE name = ?').get(projName);
@@ -722,14 +941,16 @@ app.get('/api/users/list', (req, res) => {
 
 // ========== CLAUDE.md ==========
 app.get('/api/projects/:name/claude-md', (req, res) => {
-  const projectPath = resolveUserProjectPath(req.user.username, req.params.name, req.query.type || 'personal');
+  const projectPath = resolveUserProjectPath(req.user, req.params.name, req.query.type || 'personal');
+  if (!projectPath || !fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
   const mdPath = findClaudeMd(projectPath);
   if (!mdPath) return res.json({ exists: false, content: '' });
   res.json({ exists: true, content: fs.readFileSync(mdPath, 'utf8') });
 });
 
 app.put('/api/projects/:name/claude-md', (req, res) => {
-  const projectPath = resolveUserProjectPath(req.user.username, req.params.name, req.query.type || 'personal');
+  const projectPath = resolveUserProjectPath(req.user, req.params.name, req.query.type || 'personal');
+  if (!projectPath || !fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
   const mdPath = findClaudeMd(projectPath) || path.join(projectPath, 'CLAUDE.md');
   try {
     fs.writeFileSync(mdPath, req.body.content || '');
@@ -741,46 +962,19 @@ app.put('/api/projects/:name/claude-md', (req, res) => {
 
 // ========== Sessions API ==========
 app.get('/api/projects/:name/sessions', async (req, res) => {
-  const projectPath = resolveUserProjectPath(req.user.username, req.params.name, req.query.type || 'personal');
-  const sessionDir = path.join(getUserSessionsRoot(req.user.username), projectToSessionDir(projectPath));
-  if (!fs.existsSync(sessionDir)) return res.json([]);
-
-  const jsonlFiles = fs.readdirSync(sessionDir).filter(f => f.endsWith('.jsonl'));
-  const sessions = [];
-
-  for (const file of jsonlFiles) {
-    const sessionId = file.replace('.jsonl', '');
-    const filePath = path.join(sessionDir, file);
-    const stat = fs.statSync(filePath);
-    try {
-      const { allMessages, customTitle } = await parseSessionJSONL(filePath);
-      if (allMessages.length === 0) continue;
-      const firstUser = allMessages.find(m => m.role === 'user');
-      const last = allMessages[allMessages.length - 1];
-      sessions.push({
-        sessionId,
-        firstMessage: firstUser ? firstUser.content.substring(0, 120) : null,
-        customTitle: customTitle || null,
-        lastTimestamp: last.ts || stat.mtime.toISOString(),
-        messageCount: allMessages.filter(m => m.role === 'user').length,
-        mtime: stat.mtime.getTime()
-      });
-    } catch {}
-  }
-
-  sessions.sort((a, b) => b.mtime - a.mtime);
-  if (sessions.length) {
-    const nameRows = db.prepare('SELECT session_id, name FROM session_names WHERE session_id IN (' + sessions.map(() => '?').join(',') + ')').all(...sessions.map(s => s.sessionId));
-    const nameMap = Object.fromEntries(nameRows.map(r => [r.session_id, r.name]));
-    // Load codex session IDs for each session
-    const codexRows = db.prepare('SELECT claude_session_id, codex_session_id FROM session_codex_ids WHERE claude_session_id IN (' + sessions.map(() => '?').join(',') + ')').all(...sessions.map(s => s.sessionId));
-    const codexMap = Object.fromEntries(codexRows.map(r => [r.claude_session_id, r.codex_session_id]));
-    for (const s of sessions) {
-      s.customName = nameMap[s.sessionId] || s.customTitle || null;
-      s.codexSessionId = codexMap[s.sessionId] || null;
-    }
-  }
+  const projectPath = resolveUserProjectPath(req.user, req.params.name, req.query.type || 'personal');
+  if (!projectPath || !fs.existsSync(projectPath)) return res.json([]);
+  const sessions = await collectProjectSessions(req.user, req.params.name, req.query.type || 'personal', projectPath);
   res.json(sessions);
+});
+
+app.get('/api/sessions/overview', async (req, res) => {
+  try {
+    res.json(await collectAllSessionOverview(req.user));
+  } catch (e) {
+    console.error('[sessions overview]', e);
+    res.status(500).json({ error: 'Failed to load sessions' });
+  }
 });
 
 app.put('/api/sessions/:sessionId/name', (req, res) => {
@@ -793,7 +987,8 @@ app.put('/api/sessions/:sessionId/name', (req, res) => {
     db.prepare('INSERT OR REPLACE INTO session_names (session_id, name, user_id) VALUES (?, ?, ?)').run(sessionId, trimmed, req.user.id);
   }
   if (project) {
-    const projectPath = resolveUserProjectPath(req.user.username, project, type || 'personal');
+    const projectPath = resolveUserProjectPath(req.user, project, type || 'personal');
+    if (!projectPath || !fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
     const sessionDir = path.join(getUserSessionsRoot(req.user.username), projectToSessionDir(projectPath));
     const jsonlPath = path.join(sessionDir, `${sessionId}.jsonl`);
     if (fs.existsSync(jsonlPath)) {
@@ -813,7 +1008,8 @@ app.get('/api/sessions/:sessionId/messages', async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 50, 200);
   const before = req.query.before != null ? parseInt(req.query.before) : null;
 
-  const projectPath = resolveUserProjectPath(req.user.username, projectName, projectType);
+  const projectPath = resolveUserProjectPath(req.user, projectName, projectType);
+  if (!projectPath || !fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
   const sessionDir = path.join(getUserSessionsRoot(req.user.username), projectToSessionDir(projectPath));
   const filePath = path.join(sessionDir, `${sessionId}.jsonl`);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Session not found' });
@@ -828,15 +1024,29 @@ app.get('/api/sessions/:sessionId/messages', async (req, res) => {
 
 // Create a new chat session
 app.post('/api/sessions', (req, res) => {
-  const { projectName, type } = req.body;
+  let { projectName, type, standalone } = req.body;
+  let projectType = type || 'personal';
+  if (standalone) {
+    projectType = 'personal';
+    const userProjDir = getUserProjectsDir(req.user.username);
+    if (!fs.existsSync(userProjDir)) fs.mkdirSync(userProjDir, { recursive: true });
+    do {
+      projectName = standaloneProjectNameFromDate();
+    } while (fs.existsSync(path.join(userProjDir, projectName)));
+    fs.mkdirSync(path.join(userProjDir, projectName), { recursive: true });
+  }
   if (!projectName) return res.status(400).json({ error: 'projectName is required' });
-  const projectType = type || 'personal';
-  const projectPath = resolveUserProjectPath(req.user.username, projectName, projectType);
+  const projectPath = resolveUserProjectPath(req.user, projectName, projectType);
   if (!projectPath || !fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
 
   const id = crypto.randomUUID();
-  activeSessions.set(id, { ccmobileSessionId: crypto.randomUUID(), claudeSessionId: null, codexSessionId: null, projectPath, projectName, projectType, username: req.user.username, lastActive: Date.now() });
-  res.json({ id, projectPath, projectName });
+  const ccmobileSessionId = crypto.randomUUID();
+  if (standalone) {
+    db.prepare('INSERT OR REPLACE INTO standalone_session_projects (session_id, project_name, user_id, created_at) VALUES (?, ?, ?, ?)')
+      .run(ccmobileSessionId, projectName, req.user.id, new Date().toISOString());
+  }
+  activeSessions.set(id, { ccmobileSessionId, claudeSessionId: null, codexSessionId: null, projectPath, projectName, projectType, standalone: !!standalone, username: req.user.username, lastActive: Date.now() });
+  res.json({ id, projectPath, projectName, projectType, standalone: !!standalone });
 });
 
 // Resume an existing session (claude or codex)
@@ -844,7 +1054,7 @@ app.post('/api/sessions/resume', (req, res) => {
   const { projectName, claudeSessionId, codexSessionId, type } = req.body;
   if (!projectName) return res.status(400).json({ error: 'projectName is required' });
   const projectType = type || 'personal';
-  const projectPath = resolveUserProjectPath(req.user.username, projectName, projectType);
+  const projectPath = resolveUserProjectPath(req.user, projectName, projectType);
   if (!projectPath || !fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
 
   // Load codexSessionId from DB if not provided but claudeSessionId is given
@@ -877,7 +1087,7 @@ app.post('/api/sessions/:id/message', (req, res) => {
   if (!session) return res.status(404).json({ error: 'Session not found' });
   session.lastActive = Date.now();
 
-  const { message, images, model, effort, backend: reqBackend } = req.body;
+  const { message, images, files, model, effort, backend: reqBackend } = req.body;
   const backend = (reqBackend === 'codex' || reqBackend === 'claude') ? reqBackend : config.CLI_BACKEND; // per-session override
 
   // Validate model selection based on backend
@@ -892,22 +1102,73 @@ app.post('/api/sessions/:id/message', (req, res) => {
     selectedModel = ALLOWED_MODELS.includes(model) ? model : config.CLAUDE_MODEL;
   }
 
-  // Save images inside project dir (visible in bwrap sandbox)
+  // Save chat attachments inside the project so Codex can read them.
   const tempFiles = [];
-  if (images && images.length > 0) {
+  const imageInputFiles = [];
+  const attachedFiles = [];
+  const attachmentSessionId = session.claudeSessionId || session.ccmobileSessionId || req.params.id || crypto.randomUUID();
+  function safeAttachmentName(name) {
+    const base = path.basename(name || 'attachment').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
+    return base || 'attachment';
+  }
+  function extForMime(mimeType, fallbackName) {
+    const ext = path.extname(fallbackName || '');
+    if (ext) return ext;
+    if (mimeType === 'image/png') return '.png';
+    if (mimeType === 'image/gif') return '.gif';
+    if (mimeType === 'image/webp') return '.webp';
+    if (mimeType === 'image/svg+xml') return '.svg';
+    if (mimeType === 'application/pdf') return '.pdf';
+    if (mimeType === 'text/plain') return '.txt';
+    return '.bin';
+  }
+  let totalAttachmentBytes = 0;
+  function decodeAttachmentData(data) {
+    if (!data || typeof data !== 'string') return null;
+    const normalized = data.includes(',') ? data.split(',').pop() : data;
+    const buf = Buffer.from(normalized, 'base64');
+    totalAttachmentBytes += buf.length;
+    if (buf.length > MAX_ATTACHMENT_BYTES || totalAttachmentBytes > MAX_TOTAL_ATTACHMENT_BYTES) return null;
+    return buf;
+  }
+  if (Array.isArray(images) && images.length > 0) {
     const imgDir = path.join(session.projectPath, '.ccmobile-tmp');
     if (!fs.existsSync(imgDir)) fs.mkdirSync(imgDir, { recursive: true });
-    for (const img of images) {
-      const ext = img.mimeType === 'image/png' ? '.png' : img.mimeType === 'image/gif' ? '.gif' : '.jpg';
+    for (const img of images.slice(0, MAX_ATTACHMENTS_PER_MESSAGE)) {
+      const buf = decodeAttachmentData(img?.data);
+      if (!buf) return res.status(413).json({ error: 'Attachment too large' });
+      const ext = img.mimeType === 'image/png' ? '.png' : img.mimeType === 'image/gif' ? '.gif' : img.mimeType === 'image/webp' ? '.webp' : '.jpg';
       const tmpPath = path.join(imgDir, `${crypto.randomUUID()}${ext}`);
-      fs.writeFileSync(tmpPath, Buffer.from(img.data, 'base64'));
+      fs.writeFileSync(tmpPath, buf);
       tempFiles.push(tmpPath);
+      imageInputFiles.push(tmpPath);
+    }
+  }
+  if (Array.isArray(files) && files.length > 0) {
+    const attachDir = path.join(session.projectPath, '.ccmobile-attachments', attachmentSessionId);
+    if (!fs.existsSync(attachDir)) fs.mkdirSync(attachDir, { recursive: true });
+    for (const file of files.slice(0, MAX_ATTACHMENTS_PER_MESSAGE)) {
+      const buf = decodeAttachmentData(file?.data);
+      if (!buf) return res.status(413).json({ error: 'Attachment too large' });
+      const originalName = safeAttachmentName(file.name || 'attachment');
+      const ext = extForMime(file.mimeType, originalName);
+      const nameWithExt = path.extname(originalName) ? originalName : originalName + ext;
+      const destPath = path.join(attachDir, `${Date.now()}-${crypto.randomUUID().slice(0, 8)}-${nameWithExt}`);
+      fs.writeFileSync(destPath, buf);
+      attachedFiles.push({ name: originalName || nameWithExt, path: destPath, mimeType: file.mimeType || 'application/octet-stream' });
+      if ((file.mimeType || '').startsWith('image/')) imageInputFiles.push(destPath);
     }
   }
 
-  let prompt = message || '';
-  if (tempFiles.length > 0) {
-    prompt += '\n\n' + tempFiles.map(f => `[Attached image: ${f}]`).join('\n');
+  const originalUserPrompt = message || '';
+  const logMessagePreview = originalUserPrompt || (Array.isArray(files) && files.length ? 'Please look at the attached file(s).' : 'Please look at the attached image(s).');
+  let prompt = originalUserPrompt;
+  if (imageInputFiles.length > 0) {
+    prompt += '\n\n' + imageInputFiles.map(f => `[Attached image: ${f}]`).join('\n');
+  }
+  if (attachedFiles.length > 0) {
+    prompt += '\n\nAttached files saved in the project. Read them if needed:\n' +
+      attachedFiles.map(f => `- ${f.name}: ${f.path} (${f.mimeType})`).join('\n');
   }
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -953,10 +1214,10 @@ app.post('/api/sessions/:id/message', (req, res) => {
     const codexArgs = ['exec', '--json', '--sandbox', 'danger-full-access', '--skip-git-repo-check', '-C', session.projectPath];
     if (selectedModel) codexArgs.push('--model', selectedModel);
     if (selectedEffort) codexArgs.push('-c', `model_reasoning_effort="${selectedEffort}"`);
-    if (tempFiles.length > 0) {
-      codexArgs.push('--image', tempFiles.join(','));
-    }
     codexArgs.push(prompt);
+    if (imageInputFiles.length > 0) {
+      for (const imgPath of imageInputFiles) codexArgs.push('--image', imgPath);
+    }
 
     if (config.USE_SANDBOX) {
       const bwrapArgs = buildUserSandboxArgs(username, session.projectPath, config.CODEX_CLI_PATH, codexArgs);
@@ -1147,12 +1408,12 @@ app.post('/api/sessions/:id/message', (req, res) => {
     }
     session.lastResult = { text: fullText, cost: session._lastCost, duration: session._lastDuration };
     if (backend === 'codex' && !resumeFailed) {
-      try { appendCodexTranscript(session, message || 'Please look at the attached image(s).', fullText); } catch (e) { console.error('[codex history write failed]', e.message); }
+      try { appendCodexTranscript(session, logMessagePreview, fullText); } catch (e) { console.error('[codex history write failed]', e.message); }
     }
     // Log chat with token usage
     const activeSessionId = (backend === 'codex') ? session.codexSessionId : session.claudeSessionId;
     const usage = session._lastUsage || {};
-    logChat(req.user.id, req.user.username, session.projectName, session.projectType, activeSessionId, prompt, {
+    logChat(req.user.id, req.user.username, session.projectName, session.projectType, activeSessionId, logMessagePreview, {
       inputTokens: usage.input_tokens || 0,
       outputTokens: usage.output_tokens || 0,
       cacheReadTokens: usage.cache_read_input_tokens || 0,
@@ -1233,12 +1494,18 @@ app.delete('/api/sessions/:sessionId/delete', (req, res) => {
   const projectName = req.query.project;
   const projectType = req.query.type || 'personal';
   if (!projectName) return res.status(400).json({ error: 'project required' });
-  const projectPath = resolveUserProjectPath(req.user.username, projectName, projectType);
+  const projectPath = resolveUserProjectPath(req.user, projectName, projectType);
+  if (!projectPath || !fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
+  const standaloneProject = projectType === 'personal' && isStandaloneProject(req.user.id, projectName);
   const sessionDir = path.join(getUserSessionsRoot(req.user.username), projectToSessionDir(projectPath));
   const jsonlPath = path.join(sessionDir, `${sessionId}.jsonl`);
   try { if (fs.existsSync(jsonlPath)) fs.unlinkSync(jsonlPath); } catch {}
   try { db.prepare('DELETE FROM session_names WHERE session_id = ?').run(sessionId); } catch {}
   try { db.prepare('DELETE FROM session_codex_ids WHERE claude_session_id = ?').run(sessionId); } catch {}
+  try { db.prepare('DELETE FROM standalone_session_projects WHERE session_id = ? OR (user_id = ? AND project_name = ?)').run(sessionId, req.user.id, projectName); } catch {}
+  if (standaloneProject && isPathInside(getUserProjectsDir(req.user.username), projectPath)) {
+    try { fs.rmSync(projectPath, { recursive: true, force: true }); } catch {}
+  }
   for (const [id, s] of activeSessions) {
     if (s.claudeSessionId === sessionId || s.codexSessionId === sessionId) { activeSessions.delete(id); break; }
   }
@@ -1252,15 +1519,13 @@ app.get('/api/file-check', (req, res) => {
   if (!filePath) return res.status(400).json({ exists: false });
 
   // Security: only allow files within user's project directories or shared projects
-  const userHome = getUserHome(req.user.username);
-  const isUserFile = filePath.startsWith(userHome + '/');
-  const isSharedFile = filePath.startsWith(SHARED_PROJECTS_ROOT + '/');
-  if (!isUserFile && !isSharedFile) return res.json({ exists: false });
+  if (!isAllowedFilePath(req.user, filePath)) return res.json({ exists: false });
 
   try {
-    const stat = fs.statSync(filePath);
+    const safePath = path.resolve(filePath);
+    const stat = fs.statSync(safePath);
     if (stat.isFile()) {
-      return res.json({ exists: true, size: stat.size, name: path.basename(filePath) });
+      return res.json({ exists: true, size: stat.size, name: path.basename(safePath) });
     }
   } catch {}
   res.json({ exists: false });
@@ -1271,16 +1536,14 @@ app.get('/api/file-preview', (req, res) => {
   const filePath = req.query.path;
   if (!filePath) return res.status(400).json({ error: 'path required' });
 
-  const userHome = getUserHome(req.user.username);
-  const isUserFile = filePath.startsWith(userHome + '/');
-  const isSharedFile = filePath.startsWith(SHARED_PROJECTS_ROOT + '/');
-  if (!isUserFile && !isSharedFile) return res.status(403).json({ error: 'Access denied' });
+  if (!isAllowedFilePath(req.user, filePath)) return res.status(403).json({ error: 'Access denied' });
+  const safePath = path.resolve(filePath);
 
-  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+  if (!fs.existsSync(safePath) || !fs.statSync(safePath).isFile()) {
     return res.status(404).json({ error: 'File not found' });
   }
 
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = path.extname(safePath).toLowerCase();
   const MIME_MAP = {
     '.html': 'text/html', '.htm': 'text/html',
     '.css': 'text/css', '.js': 'application/javascript',
@@ -1298,8 +1561,8 @@ app.get('/api/file-preview', (req, res) => {
   const inline = ['.html', '.htm', '.txt', '.md', '.log', '.csv', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.mp4', '.webm', '.pdf'].includes(ext);
 
   res.setHeader('Content-Type', contentType);
-  res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${encodeURIComponent(path.basename(filePath))}"`);
-  fs.createReadStream(filePath).pipe(res);
+  res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${encodeURIComponent(path.basename(safePath))}"`);
+  fs.createReadStream(safePath).pipe(res);
 });
 
 // Return a snippet (first N chars) of a text file for inline preview
@@ -1307,16 +1570,14 @@ app.get('/api/file-snippet', (req, res) => {
   const filePath = req.query.path;
   if (!filePath) return res.status(400).json({ error: 'path required' });
 
-  const userHome = getUserHome(req.user.username);
-  const isUserFile = filePath.startsWith(userHome + '/');
-  const isSharedFile = filePath.startsWith(SHARED_PROJECTS_ROOT + '/');
-  if (!isUserFile && !isSharedFile) return res.status(403).json({ error: 'Access denied' });
+  if (!isAllowedFilePath(req.user, filePath)) return res.status(403).json({ error: 'Access denied' });
+  const safePath = path.resolve(filePath);
 
-  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+  if (!fs.existsSync(safePath) || !fs.statSync(safePath).isFile()) {
     return res.status(404).json({ error: 'File not found' });
   }
 
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = path.extname(safePath).toLowerCase();
   const textExts = ['.md', '.markdown', '.txt', '.log', '.json', '.yaml', '.yml', '.toml', '.ini', '.conf',
     '.js', '.ts', '.jsx', '.tsx', '.py', '.go', '.java', '.c', '.cpp', '.rs', '.rb', '.php', '.sh',
     '.sql', '.html', '.htm', '.css', '.xml', '.csv'];
@@ -1329,7 +1590,7 @@ app.get('/api/file-snippet', (req, res) => {
   const maxChars = Math.min(parseInt(req.query.max) || defaultMax, 8000);
 
   try {
-    const fd = fs.openSync(filePath, 'r');
+    const fd = fs.openSync(safePath, 'r');
     const buf = Buffer.alloc(maxChars);
     const bytesRead = fs.readSync(fd, buf, 0, maxChars, 0);
     fs.closeSync(fd);
@@ -1345,16 +1606,14 @@ app.get('/api/file-download', (req, res) => {
   const filePath = req.query.path;
   if (!filePath) return res.status(400).json({ error: 'path required' });
 
-  const userHome = getUserHome(req.user.username);
-  const isUserFile = filePath.startsWith(userHome + '/');
-  const isSharedFile = filePath.startsWith(SHARED_PROJECTS_ROOT + '/');
-  if (!isUserFile && !isSharedFile) return res.status(403).json({ error: 'Access denied' });
+  if (!isAllowedFilePath(req.user, filePath)) return res.status(403).json({ error: 'Access denied' });
+  const safePath = path.resolve(filePath);
 
-  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+  if (!fs.existsSync(safePath) || !fs.statSync(safePath).isFile()) {
     return res.status(404).json({ error: 'File not found' });
   }
 
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = path.extname(safePath).toLowerCase();
   const MIME_MAP = {
     '.html': 'text/html', '.htm': 'text/html',
     '.css': 'text/css', '.js': 'application/javascript',
@@ -1370,8 +1629,8 @@ app.get('/api/file-download', (req, res) => {
   };
   const contentType = MIME_MAP[ext] || 'application/octet-stream';
   res.setHeader('Content-Type', contentType);
-  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(path.basename(filePath))}"`);
-  fs.createReadStream(filePath).pipe(res);
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(path.basename(safePath))}"`);
+  fs.createReadStream(safePath).pipe(res);
 });
 
 // ========== Project File Download (by relative path) ==========
@@ -1379,12 +1638,11 @@ app.get('/api/projects/:name/download', (req, res) => {
   const filePath = req.query.path;
   if (!filePath) return res.status(400).json({ error: 'path required' });
 
-  const projectPath = resolveUserProjectPath(req.user.username, req.params.name, req.query.type || 'personal');
-  if (!fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
+  const projectPath = resolveUserProjectPath(req.user, req.params.name, req.query.type || 'personal');
+  if (!projectPath || !fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
 
-  const absPath = path.join(projectPath, filePath);
-  // Security: ensure resolved path is within project directory
-  if (!absPath.startsWith(projectPath + '/')) return res.status(403).json({ error: 'Access denied' });
+  const absPath = resolveInside(projectPath, filePath);
+  if (!absPath) return res.status(403).json({ error: 'Access denied' });
 
   if (!fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) {
     return res.status(404).json({ error: 'File not found' });
@@ -1412,15 +1670,15 @@ app.get('/api/projects/:name/download', (req, res) => {
 
 // ========== File Tree & Upload ==========
 app.get('/api/projects/:name/files', (req, res) => {
-  const projectPath = resolveUserProjectPath(req.user.username, req.params.name, req.query.type || 'personal');
-  if (!fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
+  const projectPath = resolveUserProjectPath(req.user, req.params.name, req.query.type || 'personal');
+  if (!projectPath || !fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
 
   const relDir = req.query.path || '';
-  const absDir = path.join(projectPath, relDir);
-  if (!absDir.startsWith(projectPath)) return res.status(400).json({ error: 'Invalid path' });
+  const absDir = resolveInside(projectPath, relDir);
+  if (!absDir) return res.status(400).json({ error: 'Invalid path' });
   if (!fs.existsSync(absDir) || !fs.statSync(absDir).isDirectory()) return res.status(404).json({ error: 'Directory not found' });
 
-  const HIDDEN = new Set(['.git', 'node_modules', '.ccmobile-tmp', '__pycache__', '.next', '.cache', 'dist']);
+  const HIDDEN = new Set(['.git', 'node_modules', '.ccmobile-tmp', '.ccmobile-attachments', '__pycache__', '.next', '.cache', 'dist']);
   try {
     const entries = fs.readdirSync(absDir, { withFileTypes: true })
       .filter(e => !HIDDEN.has(e.name) && !e.name.startsWith('.git'))
@@ -1433,45 +1691,64 @@ app.get('/api/projects/:name/files', (req, res) => {
 });
 
 app.post('/api/projects/:name/upload', upload.array('files', 20), (req, res) => {
-  const projectPath = resolveUserProjectPath(req.user.username, req.params.name, req.query.type || req.body.type || 'personal');
-  if (!fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
+  const projectPath = resolveUserProjectPath(req.user, req.params.name, req.query.type || req.body.type || 'personal');
+  if (!projectPath || !fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
 
   const targetDir = req.body.targetDir || '';
-  const absTarget = path.join(projectPath, targetDir);
-  if (!absTarget.startsWith(projectPath)) return res.status(400).json({ error: 'Invalid path' });
+  const absTarget = resolveInside(projectPath, targetDir);
+  if (!absTarget) return res.status(400).json({ error: 'Invalid path' });
   if (!fs.existsSync(absTarget) || !fs.statSync(absTarget).isDirectory()) return res.status(400).json({ error: 'Target directory not found' });
 
   if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'No files uploaded' });
 
   const uploaded = [];
   for (const file of req.files) {
-    const destPath = path.join(absTarget, file.originalname);
-    if (fs.existsSync(destPath) && fs.statSync(destPath).isDirectory()) {
+    const safeName = safeUploadFileName(file.originalname);
+    if (!safeName) {
+      try { fs.unlinkSync(file.path); } catch {}
+      continue;
+    }
+    const destPath = resolveInside(absTarget, safeName);
+    if (!destPath || (fs.existsSync(destPath) && fs.statSync(destPath).isDirectory())) {
       try { fs.unlinkSync(file.path); } catch {}
       continue;
     }
     fs.renameSync(file.path, destPath);
-    uploaded.push(file.originalname);
+    uploaded.push(safeName);
   }
   res.json({ ok: true, uploaded });
 });
 
 app.post('/api/projects/:name/upload-zip', upload.single('file'), (req, res) => {
-  const projectPath = resolveUserProjectPath(req.user.username, req.params.name, req.query.type || req.body.type || 'personal');
-  if (!fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
+  const projectPath = resolveUserProjectPath(req.user, req.params.name, req.query.type || req.body.type || 'personal');
+  if (!projectPath || !fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
   const targetDir = req.body.targetDir || '';
-  const absTarget = path.join(projectPath, targetDir);
-  if (!absTarget.startsWith(projectPath)) return res.status(400).json({ error: 'Invalid path' });
+  const absTarget = resolveInside(projectPath, targetDir);
+  if (!absTarget) return res.status(400).json({ error: 'Invalid path' });
 
   try {
-    let folderName = path.basename(req.file.originalname, path.extname(req.file.originalname));
-    if (!folderName) folderName = 'uploaded';
-    const extractDir = path.join(absTarget, folderName);
+    let folderName = safeUploadFileName(path.basename(req.file.originalname, path.extname(req.file.originalname))) || 'uploaded';
+    const extractDir = resolveInside(absTarget, folderName);
+    if (!extractDir) return res.status(400).json({ error: 'Invalid zip folder name' });
     fs.mkdirSync(extractDir, { recursive: true });
     const zip = new AdmZip(req.file.path);
-    zip.extractAllTo(extractDir, true);
+    const entries = zip.getEntries();
+    if (entries.length > 1000) return res.status(400).json({ error: 'Zip has too many entries' });
+    let totalSize = 0;
+    for (const entry of entries) {
+      totalSize += entry.header?.size || 0;
+      if (totalSize > 100 * 1024 * 1024) return res.status(400).json({ error: 'Zip is too large after extraction' });
+      const entryPath = resolveInside(extractDir, entry.entryName);
+      if (!entryPath) return res.status(400).json({ error: 'Zip contains unsafe paths' });
+      if (entry.isDirectory) {
+        fs.mkdirSync(entryPath, { recursive: true });
+      } else {
+        fs.mkdirSync(path.dirname(entryPath), { recursive: true });
+        fs.writeFileSync(entryPath, entry.getData());
+      }
+    }
     fs.unlinkSync(req.file.path);
     res.json({ ok: true, folder: folderName });
   } catch (e) {
@@ -1486,8 +1763,8 @@ function gitExec(args, projectPath) {
 }
 
 app.get('/api/projects/:name/git-status', (req, res) => {
-  const projectPath = resolveUserProjectPath(req.user.username, req.params.name, req.query.type || 'personal');
-  if (!fs.existsSync(path.join(projectPath, '.git'))) return res.status(400).json({ error: 'Not a git repo' });
+  const projectPath = resolveUserProjectPath(req.user, req.params.name, req.query.type || 'personal');
+  if (!projectPath || !fs.existsSync(path.join(projectPath, '.git'))) return res.status(400).json({ error: 'Not a git repo' });
 
   try {
     const status = gitExec('status --porcelain', projectPath);
@@ -1502,8 +1779,8 @@ app.get('/api/projects/:name/git-status', (req, res) => {
 });
 
 app.post('/api/projects/:name/git-push', (req, res) => {
-  const projectPath = resolveUserProjectPath(req.user.username, req.params.name, req.query.type || req.body.type || 'personal');
-  if (!fs.existsSync(path.join(projectPath, '.git'))) return res.status(400).json({ error: 'Not a git repo' });
+  const projectPath = resolveUserProjectPath(req.user, req.params.name, req.query.type || req.body.type || 'personal');
+  if (!projectPath || !fs.existsSync(path.join(projectPath, '.git'))) return res.status(400).json({ error: 'Not a git repo' });
 
   const commitMsg = req.body.message || 'Update from ccmobile';
   try {
@@ -1526,7 +1803,8 @@ app.get('/api/sessions/:sessionId/rewind-points', async (req, res) => {
   const projectType = req.query.type || 'personal';
   if (!projectName) return res.status(400).json({ error: 'project query param required' });
 
-  const projectPath = resolveUserProjectPath(req.user.username, projectName, projectType);
+  const projectPath = resolveUserProjectPath(req.user, projectName, projectType);
+  if (!projectPath || !fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
   const sessionDir = path.join(getUserSessionsRoot(req.user.username), projectToSessionDir(projectPath));
   const filePath = path.join(sessionDir, `${sessionId}.jsonl`);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Session not found' });
@@ -1546,8 +1824,8 @@ app.get('/api/sessions/:sessionId/rewind-points', async (req, res) => {
 app.post('/api/rewind', async (req, res) => {
   const { projectName, sessionId, messageId, type } = req.body;
   const projectType = type || 'personal';
-  const projectPath = resolveUserProjectPath(req.user.username, projectName, projectType);
-  if (!fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
+  const projectPath = resolveUserProjectPath(req.user, projectName, projectType);
+  if (!projectPath || !fs.existsSync(projectPath)) return res.status(404).json({ error: 'Project not found' });
 
   const sessionDir = path.join(getUserSessionsRoot(req.user.username), projectToSessionDir(projectPath));
   const filePath = path.join(sessionDir, `${sessionId}.jsonl`);
@@ -1700,7 +1978,8 @@ app.post('/api/admin/users/:id/reset-password', requireAdmin, (req, res) => {
 app.post('/api/admin/shared-projects', requireAdmin, (req, res) => {
   const { name, description } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Project name required' });
-  const projName = name.trim().replace(/[^a-zA-Z0-9_\-\.]/g, '-');
+  const projName = safeProjectName(name.trim().replace(/[^a-zA-Z0-9_\-\.]/g, '-'));
+  if (!projName) return res.status(400).json({ error: 'Invalid project name' });
 
   const existing = db.prepare('SELECT id FROM shared_projects WHERE name = ?').get(projName);
   if (existing) return res.status(409).json({ error: 'Project name already exists' });
@@ -1864,7 +2143,8 @@ if (!config.HAS_ENV) {
   console.log(`  Config     : .env loaded ✓`);
 }
 console.log('');
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`  → http://localhost:${PORT}`);
+const HOST = config.HOST || '127.0.0.1';
+app.listen(PORT, HOST, () => {
+  console.log(`  → http://${HOST}:${PORT}`);
   console.log('');
 });

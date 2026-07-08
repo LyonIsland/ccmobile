@@ -18,13 +18,13 @@
   --radius: 12px; --radius-lg: 16px;
 }
 html.light {
-  --bg: #f5f5f0; --surface: #ffffff; --surface2: #f0efe8; --surface3: #e8e6df;
-  --border: #ddd8cf; --border-light: #e8e4db;
-  --text: #2c2c2c; --text2: #777; --text3: #aaa;
-  --accent: #9c7a4f; --accent-hover: #b08a5c; --accent-bg: rgba(156,122,79,.06);
-  --green: #3a8a5c; --orange: #b08030; --red: #c04040;
+  --bg: #ffffff; --surface: #ffffff; --surface2: #f2f2f2; --surface3: #e9e9e9;
+  --border: #eeeeee; --border-light: #e5e5e5;
+  --text: #111111; --text2: #6f6f6f; --text3: #a7a7a7;
+  --accent: #1687e8; --accent-hover: #0875d1; --accent-bg: rgba(22,135,232,.08);
+  --green: #188a55; --orange: #9a6a15; --red: #c93636;
 }
-html.light .msg.user .bubble { background: var(--surface3); }
+html.light .msg.user .bubble { background: #000; color: #fff; }
 html.light .msg .bubble pre { background: #f0efe8; border: 1px solid var(--border); }
 html.light .hljs { background: #f0efe8; }
 html, body { height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif; font-size: 15px; overflow: hidden; }
@@ -141,37 +141,130 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 
 /* ====== Page: Projects (grid) ====== */
 #page-projects .projects-header {
-  padding: 24px 32px 0; display: flex; flex-direction: column; gap: 0; flex-shrink: 0;
+  width: 100%; max-width: 640px; margin: 0 auto;
+  padding: 32px 22px 0; display: flex; flex-direction: column; gap: 0; flex-shrink: 0;
 }
 #page-projects .projects-header .projects-title-row {
   display: flex; align-items: center; gap: 16px;
 }
-#page-projects .projects-header h1 { font-size: 22px; font-weight: 700; flex: 1; letter-spacing: -0.3px; }
+#page-projects .projects-header h1 { font-size: 28px; font-weight: 750; flex: 1; letter-spacing: 0; }
 #page-projects .projects-toolbar {
-  display: flex; align-items: center; gap: 8px; padding: 12px 0 16px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 8px; padding: 18px 0 20px; flex-wrap: wrap;
 }
 .projects-grid {
-  flex: 1; overflow-y: auto; padding: 4px 32px 32px;
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 12px; align-content: start;
+  width: 100%; max-width: 640px; margin: 0 auto;
+  flex: 1; overflow-y: auto; padding: 4px 22px 110px;
+  display: flex; flex-direction: column; gap: 6px; align-content: start;
 }
 .project-card {
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
-  padding: 20px; cursor: pointer; transition: all .15s;
+  background: transparent; border: none; border-radius: 10px;
+  padding: 13px 14px; cursor: pointer; transition: background .15s;
+  display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px;
 }
-.project-card:hover { border-color: var(--accent); background: var(--surface2); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,.1); position: relative; z-index: 1; }
-.project-card .name { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
-.project-card .meta { display: flex; gap: 6px; flex-wrap: wrap; }
-.project-card .tag { font-size: 11px; padding: 3px 8px; border-radius: 6px; background: var(--surface2); color: var(--text2); font-weight: 500; }
+.project-card:hover { background: var(--surface2); position: relative; z-index: 1; }
+.project-card .name { font-size: 18px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 12px; }
+.project-card .project-icon { width: 24px; height: 24px; color: var(--text2); flex-shrink: 0; }
+.project-card .project-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-card .meta { display: flex; justify-content: flex-end; gap: 6px; flex-wrap: nowrap; min-width: 0; }
+.project-card .tag { font-size: 12px; padding: 3px 8px; border-radius: 999px; background: var(--surface2); color: var(--text2); font-weight: 500; white-space: nowrap; }
 .project-card .tag.git { background: rgba(91,185,140,.1); color: var(--green); }
 .project-card .tag.claude { background: var(--accent-bg); color: var(--accent); }
 .project-card .tag.sessions { background: rgba(212,160,60,.1); color: var(--orange); }
+.conversation-shell {
+  width: 100%; max-width: 640px; margin: 0 auto; padding: 32px 22px 110px;
+  overflow-y: auto; flex: 1; background: var(--bg);
+}
+.conversation-top {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 28px;
+}
+.conversation-top h1 {
+  flex: 1; font-size: 28px; font-weight: 750; letter-spacing: 0;
+}
+.conversation-icon-btn {
+  width: 38px; height: 38px; border: none; background: transparent; color: var(--text);
+  border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: background .15s;
+}
+.conversation-icon-btn:hover { background: var(--surface2); }
+.conversation-avatar { background: var(--surface2); color: var(--text3); }
+.conversation-project-entry {
+  width: 100%; display: flex; align-items: center; gap: 14px; padding: 14px 2px;
+  border: none; background: transparent; color: var(--text); font-size: 18px; font-weight: 600;
+  cursor: pointer; text-align: left; margin-bottom: 16px;
+}
+.conversation-project-entry .entry-icon {
+  width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+}
+.conversation-search, .project-search {
+  width: 100%; margin: 0 0 24px;
+}
+.conversation-search input, .project-search input {
+  width: 100%; height: 46px; border: none; border-radius: 23px;
+  background: var(--surface2); color: var(--text); outline: none;
+  padding: 0 18px; font-size: 16px; font-family: inherit;
+}
+.conversation-search input::placeholder, .project-search input::placeholder { color: var(--text3); }
+.conversation-section-title {
+  font-size: 16px; font-weight: 700; margin: 20px 0 12px; color: var(--text);
+}
+.conversation-list { display: flex; flex-direction: column; gap: 6px; min-height: 0; overflow: hidden; }
+.conversation-collapse {
+  display: grid; grid-template-rows: 1fr;
+  transition: grid-template-rows .22s ease, opacity .18s ease, transform .22s ease;
+  opacity: 1; transform: translateY(0);
+}
+.conversation-collapse.collapsed {
+  grid-template-rows: 0fr; opacity: 0; transform: translateY(-4px);
+  pointer-events: none;
+}
+.conversation-row {
+  width: 100%; min-height: 50px; padding: 12px 14px; border: none; border-radius: 10px;
+  background: transparent; color: var(--text); display: grid; grid-template-columns: 1fr auto;
+  align-items: center; gap: 12px; cursor: pointer; text-align: left; font-size: 18px;
+}
+.conversation-row:hover, .conversation-row.active { background: var(--surface2); }
+.conversation-row .title {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.25;
+}
+.conversation-row .meta {
+  color: var(--text3); font-size: 14px; white-space: nowrap;
+}
+.conversation-project-group { margin-bottom: 20px; }
+.conversation-project-name {
+  display: flex; align-items: center; gap: 10px; color: var(--text2);
+  font-size: 18px; font-weight: 500; padding: 8px 2px;
+}
+.conversation-project-toggle {
+  width: 100%; border: none; background: transparent; color: inherit; cursor: pointer;
+  display: flex; align-items: center; gap: 10px; padding: 0; text-align: left;
+  font: inherit;
+}
+.conversation-project-toggle .project-label {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.conversation-project-toggle .project-count {
+  color: var(--text3); font-size: 14px; white-space: nowrap;
+}
+.conversation-project-toggle .chevron {
+  width: 18px; height: 18px; color: var(--text3); transition: transform .15s ease;
+}
+.conversation-project-toggle.collapsed .chevron { transform: rotate(-90deg); }
+.conversation-empty {
+  color: var(--text3); padding: 40px 4px; font-size: 15px; line-height: 1.5;
+}
+.conversation-fab {
+  position: fixed; right: 28px; bottom: max(24px, env(safe-area-inset-bottom));
+  min-width: 126px; height: 56px; border: none; border-radius: 28px; background: #111; color: #fff;
+  box-shadow: 0 16px 34px rgba(0,0,0,.24); font-size: 18px; font-weight: 650; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 10px; z-index: 5;
+}
+html:not(.light) .conversation-fab { background: var(--surface3); }
 .btn-action {
-  padding: 8px 16px; border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 8px 14px; border: none; border-radius: 999px;
   background: transparent; color: var(--text2); font-size: 13px; font-weight: 500;
   cursor: pointer; transition: all .15s; white-space: nowrap;
 }
-.btn-action:hover { border-color: var(--accent); color: var(--accent); }
+.btn-action:hover { background: var(--surface2); color: var(--text); }
 .btn-action.primary { background: var(--accent-bg); border-color: rgba(196,164,124,.2); color: var(--accent); }
 .btn-action.primary:hover { background: rgba(196,164,124,.15); }
 .btn-action.danger { color: var(--red); border-color: rgba(224,96,96,.2); }
@@ -179,12 +272,12 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 
 /* ====== Page: Chat ====== */
 .chat-header {
-  display: flex; align-items: center; padding: 12px 24px; min-height: 52px;
-  border-bottom: 1px solid var(--border); gap: 12px; flex-shrink: 0; background: var(--bg);
+  display: flex; align-items: center; padding: 18px 24px 8px; min-height: 60px;
+  border-bottom: none; gap: 12px; flex-shrink: 0; background: var(--bg);
 }
 .chat-header .back-btn {
-  display: none; width: 32px; height: 32px; border: none; background: transparent;
-  color: var(--text2); cursor: pointer; border-radius: 8px; font-size: 18px;
+  display: flex; width: 38px; height: 38px; border: none; background: transparent;
+  color: var(--text); cursor: pointer; border-radius: 50%; font-size: 18px;
   align-items: center; justify-content: center; transition: all .15s;
 }
 .chat-header .back-btn:hover { background: var(--surface2); color: var(--text); }
@@ -194,23 +287,34 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   align-items: center; justify-content: center; transition: all .15s;
 }
 .chat-header .menu-btn:hover { background: var(--surface2); color: var(--text); }
-.chat-header h1 { font-size: 15px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-header h1 { font-size: 22px; font-weight: 700; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); letter-spacing: 0; }
+.chat-icon-action {
+  width: 38px; height: 38px; padding: 0; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+}
 
 .messages {
-  flex: 1; overflow-y: auto; padding: 24px 24px 12px; -webkit-overflow-scrolling: touch;
+  flex: 1; overflow-y: auto; padding: 18px 24px 12px; -webkit-overflow-scrolling: touch;
   display: flex; flex-direction: column;
 }
-.messages-inner { width: 100%; max-width: var(--chat-max-w); margin: 0 auto; }
+.scroll-bottom-btn {
+  position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%);
+  width: 42px; height: 42px; border: 1px solid var(--border); border-radius: 50%;
+  background: var(--surface); color: var(--text); box-shadow: 0 8px 24px rgba(0,0,0,.12);
+  display: none; align-items: center; justify-content: center; cursor: pointer; z-index: 12;
+}
+.scroll-bottom-btn.visible { display: flex; }
+.messages-inner { width: 100%; max-width: 820px; margin: 0 auto; }
 
-.msg { margin-bottom: 20px; }
+.msg { margin-bottom: 24px; }
 .msg.user { display: flex; flex-direction: column; align-items: flex-end; }
 .msg.user .bubble {
-  background: var(--surface2); padding: 12px 16px; border-radius: 18px 18px 4px 18px;
-  font-size: 14px; line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+  background: #000; color: #fff; padding: 14px 20px; border-radius: 24px;
+  font-size: 20px; line-height: 1.45; white-space: pre-wrap; word-break: break-word;
 }
 .msg.ai { display: flex; justify-content: flex-start; }
 .msg.ai .bubble {
-  padding: 4px 0; max-width: 100%; font-size: 14.5px; line-height: 1.7;
+  padding: 4px 0; max-width: 100%; font-size: 21px; line-height: 1.65;
   word-break: break-word;
 }
 .msg.ai .bubble p { margin: 0 0 12px 0; }
@@ -381,13 +485,40 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   gap: 6px; background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); margin-bottom: 8px; max-width: fit-content;
 }
+.work-progress {
+  width: min(100%, 480px); display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 14px; background: var(--surface2); border-radius: 16px; color: var(--text2);
+}
+.work-progress .work-title { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); }
+.work-progress .dots { display: inline-flex; gap: 3px; }
+.work-progress .dots span {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+  animation: dotPulse 1.4s infinite;
+}
+.work-progress .dots span:nth-child(2) { animation-delay: .2s; }
+.work-progress .dots span:nth-child(3) { animation-delay: .4s; }
+.work-progress .work-steps { display: flex; flex-direction: column; gap: 6px; }
+.work-progress .work-step { display: flex; align-items: center; gap: 8px; font-size: 12px; min-width: 0; }
+.work-progress .work-step .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+.work-progress .work-step .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-error-card {
+  max-width: min(100%, 520px); padding: 14px 16px; border-radius: 16px;
+  background: rgba(201,54,54,.08); color: var(--text); border: 1px solid rgba(201,54,54,.18);
+}
+.chat-error-card .title { font-size: 14px; font-weight: 650; margin-bottom: 4px; }
+.chat-error-card .desc { font-size: 13px; color: var(--text2); line-height: 1.5; }
+.chat-error-card .actions { display: flex; gap: 8px; margin-top: 10px; }
+.chat-error-card button {
+  border: none; border-radius: 999px; padding: 7px 12px; background: #111; color: #fff;
+  font-size: 12px; cursor: pointer;
+}
 .msg .tool-info .icon { color: var(--orange); }
 .msg .meta-line { font-size: 11px; color: var(--text3); margin-top: 6px; }
 .msg.history .bubble { opacity: .85; }
 
 /* Chat divider */
 .chat-divider { text-align: center; font-size: 12px; color: var(--text3); padding: 16px 0; position: relative; }
-.chat-divider::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; border-top: 1px solid var(--border); }
+.chat-divider::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; border-top: 1px solid var(--border-light); }
 .chat-divider span { background: var(--bg); padding: 0 16px; position: relative; }
 
 /* Empty state */
@@ -401,37 +532,50 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 
 /* Input area */
 .input-area {
-  padding: 12px 24px; padding-bottom: max(16px, env(safe-area-inset-bottom));
+  padding: 10px 20px; padding-bottom: max(16px, env(safe-area-inset-bottom));
   flex-shrink: 0; display: flex; flex-direction: column; align-items: center;
 }
 .input-container {
-  width: 100%; max-width: var(--chat-max-w);
-  background: var(--surface); border: 1px solid var(--border); border-radius: 20px;
-  padding: 8px 12px; transition: border-color .15s;
+  width: 100%; max-width: 820px;
+  background: transparent; border: none; border-radius: 0;
+  padding: 0; transition: border-color .15s;
 }
-.input-container:focus-within { border-color: var(--accent); }
+.input-container:focus-within { border-color: transparent; }
 .image-preview-area { display: flex; gap: 8px; padding: 4px 4px 8px; flex-wrap: wrap; }
-.image-preview-item { position: relative; width: 56px; height: 56px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); }
+.composer-notice {
+  display: none; margin: 2px 4px 8px; padding: 8px 10px; border-radius: 10px;
+  font-size: 12px; line-height: 1.4; color: var(--text2); background: var(--surface2);
+}
+.composer-notice.error { color: var(--red); background: rgba(201,54,54,.08); }
+.composer-notice.ok { color: var(--green); background: rgba(24,138,85,.08); }
+.image-preview-item { position: relative; width: 56px; height: 56px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); background: var(--surface2); }
 .image-preview-item img { width: 100%; height: 100%; object-fit: cover; }
 .image-preview-item .remove { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; background: rgba(0,0,0,.7); border: none; border-radius: 50%; color: #fff; font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-.input-row { display: flex; gap: 8px; align-items: flex-end; }
+.file-preview-chip { position: relative; display: flex; align-items: center; gap: 8px; max-width: 220px; min-height: 40px; padding: 8px 30px 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface2); color: var(--text); font-size: 12px; }
+.file-preview-chip .file-icon { color: var(--accent); font-size: 14px; flex-shrink: 0; }
+.file-preview-chip .file-meta { min-width: 0; }
+.file-preview-chip .file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
+.file-preview-chip .file-size { color: var(--text3); font-size: 11px; margin-top: 2px; }
+.file-preview-chip .remove { position: absolute; top: 4px; right: 4px; width: 18px; height: 18px; background: transparent; border: none; border-radius: 50%; color: var(--text3); font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.file-preview-chip .remove:hover { background: var(--surface3); color: var(--text); }
+.input-row { display: flex; gap: 10px; align-items: flex-end; }
 .input-row textarea {
-  flex: 1; background: transparent; border: none; color: var(--text);
-  padding: 6px 8px; font-size: 15px; font-family: inherit; resize: none;
-  max-height: 140px; line-height: 1.45; outline: none;
+  flex: 1; background: var(--surface2); border: none; color: var(--text);
+  padding: 13px 18px; font-size: 18px; font-family: inherit; resize: none;
+  max-height: 140px; min-height: 54px; line-height: 1.45; outline: none; border-radius: 27px;
 }
 .input-row textarea::placeholder { color: var(--text3); }
 .input-row .icon-btn {
-  width: 36px; height: 36px; border-radius: 50%; border: none;
-  background: transparent; color: var(--text3); font-size: 18px;
+  width: 54px; height: 54px; border-radius: 50%; border: none;
+  background: var(--surface2); color: var(--text2); font-size: 24px;
   cursor: pointer; flex-shrink: 0; display: flex; align-items: center;
   justify-content: center; transition: all .15s;
 }
 .input-row .icon-btn:hover { color: var(--text2); background: var(--surface2); }
 .input-row .btn-send {
-  background: var(--accent); color: #fff; font-size: 16px;
+  background: #000; color: #fff; font-size: 18px;
 }
-.input-row .btn-send:hover { background: var(--accent-hover); }
+.input-row .btn-send:hover { background: #111; }
 .input-row .btn-send:disabled { opacity: .3; }
 .input-row .btn-send.stopping { background: var(--red); opacity: 1; }
 .input-row .btn-send.stopping:hover { background: #c04040; }
@@ -449,6 +593,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   min-width: 70px; appearance: auto;
 }
 #effort-select:hover { border-color: var(--accent); }
+#page-chat #model-select, #page-chat #effort-select { display: none !important; }
 
 /* Backend mode toggle */
 .backend-toggle {
@@ -611,7 +756,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .sidebar-overlay-bg.open { display: block; }
 
 /* ====== Responsive ====== */
-.projects-menu-btn { display: none; }
+.projects-menu-btn { display: flex; align-items: center; justify-content: center; padding: 8px; }
 @media (max-width: 768px) {
   .sidebar {
     position: fixed; top: 0; left: -100%; width: 85%; max-width: 320px;
@@ -620,13 +765,13 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   }
   .sidebar.mobile-open { left: 0; }
   .chat-header .back-btn { display: flex; }
-  .chat-header .menu-btn { display: flex; }
-  .projects-menu-btn { display: flex; align-items: center; justify-content: center; padding: 8px; }
+  .chat-header .menu-btn { display: none; }
   #page-projects .projects-header { padding: 20px 16px 0; }
   #page-projects .projects-toolbar { padding: 8px 0 12px; gap: 6px; }
   #page-projects .projects-toolbar .btn-action { padding: 6px 12px; font-size: 12px; }
   .projects-grid { padding: 0 16px 16px; grid-template-columns: 1fr; }
   .messages { padding: 16px 12px 8px; }
+  .scroll-bottom-btn { bottom: 86px; }
   .input-area { padding: 8px 12px; }
   .compact-bar { padding: 0 12px; }
   .input-container { border-radius: 16px; }
@@ -634,6 +779,10 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   .chat-header .new-chat-label { display: none; }
   .page-header { padding: 14px 16px; min-height: 52px; gap: 10px; }
   .page-header h1 { font-size: 18px; }
+  .conversation-shell { padding: 32px 16px 104px; }
+  .conversation-top h1 { font-size: 28px; }
+  .conversation-row { font-size: 17px; padding: 12px 10px; }
+  .conversation-fab { right: 20px; bottom: max(18px, env(safe-area-inset-bottom)); }
 }
 @media (min-width: 769px) {
   .sidebar-overlay-bg { display: none !important; }
@@ -1083,18 +1232,41 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 
   <!-- Main content area -->
   <div class="main-content">
+    <!-- Page: Conversations -->
+    <div id="page-conversations" class="page">
+      <div class="conversation-shell scroll-area">
+        <div class="conversation-top">
+          <h1>aimobile</h1>
+          <button class="conversation-icon-btn" onclick="loadConversationOverview()" title="Refresh"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-2.64-6.36"/><path d="M21 3v6h-6"/></svg></button>
+          <button class="conversation-icon-btn conversation-avatar" onclick="toggleTheme()" title="Theme"></button>
+        </div>
+        <button class="conversation-project-entry" onclick="showPage('projects')">
+          <span class="entry-icon"><svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12a3 3 0 013 3v13H7a3 3 0 01-3-3V4z"/><path d="M8 8h6"/><path d="M8 12h8"/></svg></span>
+          <span>项目</span>
+        </button>
+        <div class="conversation-search">
+          <input id="conversation-search-input" type="search" placeholder="搜索对话或项目" oninput="renderConversationOverview()">
+        </div>
+        <div id="conversation-overview"><div class="conversation-empty">Loading...</div></div>
+      </div>
+      <button class="conversation-fab" onclick="newStandaloneChat()"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4 12.5-12.5z"/></svg><span>聊天</span></button>
+    </div>
+
     <!-- Page: Projects -->
     <div id="page-projects" class="page active">
       <div class="projects-header">
         <div class="projects-title-row">
-          <button class="btn-action projects-menu-btn" onclick="openSidebar()" title="Menu"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
-          <h1>Projects</h1>
-          <button class="btn-action" onclick="openCreateProjectModal()" title="New Project" style="font-size:18px;font-weight:700;line-height:1">+</button>
+          <button class="btn-action projects-menu-btn" onclick="showPage('conversations')" title="Conversations"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+          <h1>项目</h1>
+          <button class="btn-action chat-icon-action" onclick="openCreateProjectModal()" title="New Project"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
         </div>
         <div class="projects-toolbar">
           <button class="btn-action" id="btn-sort" onclick="toggleSortMode()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5h10"/><path d="M11 9h7"/><path d="M11 13h4"/><path d="M3 17l3 3 3-3"/><path d="M6 18V4"/></svg> Sort</button>
           <button class="btn-action" onclick="showPage('marketplace')" title="Shared Projects"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg> Shared</button>
           <button class="btn-action" id="btn-admin-projects" onclick="showPage('admin')" title="Admin Panel" style="display:none"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15 1.65 1.65 0 003 14.08V14a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V21a2 2 0 010 4h.09"/></svg> Admin</button>
+        </div>
+        <div class="project-search">
+          <input id="project-search-input" type="search" placeholder="搜索项目" oninput="renderProjectList()">
         </div>
       </div>
       <div class="projects-grid scroll-area" id="project-list"></div>
@@ -1103,13 +1275,14 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <!-- Page: Chat -->
     <div id="page-chat" class="page">
       <div class="chat-header">
-        <button class="back-btn" onclick="showPage('projects')">&#8592;</button>
-        <button class="menu-btn" onclick="openSidebar()">&#9776;</button>
+        <button class="back-btn" onclick="showPage('conversations')" title="Conversations"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="17" x2="20" y2="17"/></svg></button>
+        <button class="menu-btn" onclick="showPage('conversations')" title="Conversations"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="17" x2="20" y2="17"/></svg></button>
         <h1 id="chat-title">Chat</h1>
-        <button class="btn-action" onclick="newChat()" title="New Chat" style="display:flex;align-items:center;gap:4px;padding:6px 12px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg><span class="new-chat-label">New</span></button>
-        <button class="btn-action" onclick="openGitModal()" style="display:flex;align-items:center;gap:4px;padding:6px 12px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14L21 3"/><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/></svg><span class="new-chat-label">Push</span></button>
+        <button class="btn-action chat-icon-action" onclick="newChat()" title="New Chat"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>
+        <button class="btn-action chat-icon-action" onclick="openGitModal()" title="More"><svg width="25" height="25" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
       </div>
       <div class="messages" id="messages"></div>
+      <button class="scroll-bottom-btn" id="scroll-bottom-btn" onclick="scrollToBottom(true)" title="Scroll to bottom">&#8595;</button>
       <div class="compact-bar" id="compact-bar" style="display:none">
         <div class="compact-bar-inner">
           <button class="btn-compact" id="btn-compact" onclick="openCompactModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>Compact</button>
@@ -1118,10 +1291,11 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       <div class="input-area">
         <div class="input-area-wrap">
           <div class="input-container">
+            <div class="composer-notice" id="composer-notice"></div>
             <div class="image-preview-area" id="image-previews" style="display:none"></div>
             <div class="input-row">
-              <button class="icon-btn" onclick="document.getElementById('file-input').click()" title="Upload image"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></button>
-              <textarea id="input" rows="1" placeholder="Send a message..."></textarea>
+              <button class="icon-btn" onclick="document.getElementById('file-input').click()" title="Upload file"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+              <textarea id="input" rows="1" placeholder="询问 aimobile"></textarea>
               <select id="model-select" title="Select model">
                 <option value="opus">Opus</option>
                 <option value="sonnet">Sonnet</option>
@@ -1136,7 +1310,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
             </div>
           </div>
         </div>
-        <input type="file" id="file-input" accept="image/*" multiple style="display:none" onchange="handleFileSelect(this)">
+        <input type="file" id="file-input" multiple style="display:none" onchange="handleFileSelect(this)">
       </div>
     </div>
 
@@ -1330,6 +1504,7 @@ let currentUser = JSON.parse(localStorage.getItem('ccmobile_user') || 'null');
 let state = {
   currentProject: null,
   currentProjectType: 'personal',
+  currentProjectStandalone: false,
   activeId: null,
   claudeSessionId: null,
   codexSessionId: null,
@@ -1339,6 +1514,10 @@ let state = {
   loadingMore: false,
   hasMore: false
 };
+let conversationOverviewItems = [];
+let collapsedConversationProjects = JSON.parse(localStorage.getItem('ccmobile_collapsed_conversation_projects') || '{}');
+let conversationOverviewCache = null;
+let projectListCache = [];
 
 // Restore model selection from localStorage
 let appBackend = 'codex';
@@ -1432,7 +1611,7 @@ async function enterApp() {
   if (currentUser && currentUser.theme) {
     applyTheme(currentUser.theme);
   }
-  showPage('projects');
+  openLatestConversation();
   // Trigger onboarding for first-time users
   if (currentUser && !currentUser.hasOnboarded) {
     setTimeout(() => startOnboarding(), 600);
@@ -1464,8 +1643,16 @@ function showPage(id) {
   $(`#page-${id}`).classList.add('active');
   const ideasTab = document.getElementById('btn-ideas-tab');
   if (ideasTab) ideasTab.style.display = id === 'chat' ? '' : 'none';
+  if (id === 'conversations') {
+    loadConversationOverview();
+    closeSidebar();
+    closeClaudeMdPanel();
+    closeIdeasPanel();
+  }
   if (id === 'projects') {
-    state.currentProject = null; loadProjects();
+    state.currentProject = null;
+    state.currentProjectStandalone = false;
+    loadProjects();
     $('#sidebar-back-btn').style.display = 'none';
     $('#sidebar-actions').style.display = 'none';
     $('#sidebar-filetree').style.display = 'none';
@@ -1479,6 +1666,146 @@ function showPage(id) {
   }
   if (id === 'admin') { loadAdminPanel(); }
   if (id === 'marketplace') { loadMarketplace(); }
+}
+
+async function openLatestConversation() {
+  try {
+    const res = await authFetch('/api/sessions/overview');
+    const overview = await res.json();
+    conversationOverviewItems = [];
+    if (overview.latest) {
+      await openSessionFromOverview(overview.latest);
+      return;
+    }
+  } catch {}
+  showPage('conversations');
+}
+
+function sessionTitle(s) {
+  return s.customName || s.firstMessage || 'Untitled conversation';
+}
+
+function jsArg(value) {
+  return JSON.stringify(value == null ? '' : String(value));
+}
+
+async function loadConversationOverview() {
+  const el = $('#conversation-overview');
+  if (!el) return;
+  el.innerHTML = '<div class="conversation-empty">Loading...</div>';
+  try {
+    const res = await authFetch('/api/sessions/overview');
+    conversationOverviewCache = await res.json();
+    renderConversationOverview();
+  } catch (e) {
+    el.innerHTML = '<div class="conversation-empty">会话加载失败，请稍后重试。</div>';
+  }
+}
+
+function renderConversationOverview() {
+  const el = $('#conversation-overview');
+  if (!el || !conversationOverviewCache) return;
+  conversationOverviewItems = [];
+  const q = ($('#conversation-search-input')?.value || '').trim().toLowerCase();
+  const matchesSession = s => {
+    if (!q) return true;
+    return [sessionTitle(s), s.projectName, s.projectType].some(v => String(v || '').toLowerCase().includes(q));
+  };
+  const sections = [];
+  const standalone = (conversationOverviewCache.standalone || []).filter(matchesSession);
+  const projects = (conversationOverviewCache.projects || []).map(p => ({
+    ...p,
+    sessions: (p.sessions || []).filter(s => matchesSession(s) || String(p.name || '').toLowerCase().includes(q))
+  }));
+  if (standalone.length) {
+    sections.push(`
+      <div class="conversation-section-title">最近</div>
+      <div class="conversation-list">
+        ${standalone.map(renderConversationRow).join('')}
+      </div>
+    `);
+  }
+  const projectBlocks = projects
+    .filter(p => (p.sessions || []).length > 0 || (q && String(p.name || '').toLowerCase().includes(q)))
+    .map(renderProjectConversationGroup).join('');
+  if (projectBlocks) {
+    sections.push('<div class="conversation-section-title">项目</div>' + projectBlocks);
+  }
+  const empty = q ? '没有匹配的对话或项目。' : '还没有对话。点击右下角“聊天”开始一个无项目对话，或进入“项目”选择工作目录。';
+  el.innerHTML = sections.join('') || `<div class="conversation-empty">${empty}</div>`;
+}
+
+function projectCollapseKey(p) {
+  return `${p.type || 'personal'}:${p.name}`;
+}
+
+function cssEscapeValue(value) {
+  if (window.CSS && typeof CSS.escape === 'function') return CSS.escape(value);
+  return String(value).replace(/["\\]/g, '\\$&');
+}
+
+function renderProjectConversationGroup(p) {
+  const sessions = p.sessions || [];
+  const key = projectCollapseKey(p);
+  const collapsed = !!collapsedConversationProjects[key];
+  return `
+    <div class="conversation-project-group" data-project-key="${esc(key)}">
+      <div class="conversation-project-name">
+        <button class="conversation-project-toggle${collapsed ? ' collapsed' : ''}" onclick='toggleProjectConversationGroup(${JSON.stringify(key)})'>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12a3 3 0 013 3v13H7a3 3 0 01-3-3V4z"/><path d="M8 8h6"/><path d="M8 12h8"/></svg>
+          <span class="project-label">${esc(p.name)}</span>
+          <span class="project-count">${sessions.length}</span>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+      </div>
+      <div class="conversation-collapse${collapsed ? ' collapsed' : ''}">
+        <div class="conversation-list">
+          ${sessions.slice(0, 5).map(renderConversationRow).join('')}
+        </div>
+      </div>
+    </div>`;
+}
+
+function toggleProjectConversationGroup(key) {
+  collapsedConversationProjects[key] = !collapsedConversationProjects[key];
+  localStorage.setItem('ccmobile_collapsed_conversation_projects', JSON.stringify(collapsedConversationProjects));
+  const group = document.querySelector(`.conversation-project-group[data-project-key="${cssEscapeValue(key)}"]`);
+  if (!group) return;
+  group.querySelector('.conversation-project-toggle')?.classList.toggle('collapsed', !!collapsedConversationProjects[key]);
+  group.querySelector('.conversation-collapse')?.classList.toggle('collapsed', !!collapsedConversationProjects[key]);
+}
+
+function renderConversationRow(s) {
+  const title = sessionTitle(s);
+  const active = (s.sessionId === state.claudeSessionId || s.codexSessionId === state.codexSessionId) ? ' active' : '';
+  const idx = conversationOverviewItems.push({ ...s, title }) - 1;
+  return `
+    <button class="conversation-row${active}" onclick="openSessionFromOverview(conversationOverviewItems[${idx}])">
+      <span class="title">${esc(title)}</span>
+      <span class="meta">${formatTime(s.lastTimestamp)}</span>
+    </button>`;
+}
+
+function setProjectContext(name, type, standalone = false) {
+  state.currentProject = name;
+  state.currentProjectType = type || 'personal';
+  state.currentProjectStandalone = !!standalone;
+  $('#sidebar-project-name').textContent = standalone ? 'Chat' : name;
+  $('#sidebar-back-btn').style.display = '';
+  $('#sidebar-actions').style.display = '';
+  $('#sidebar-filetree').style.display = 'flex';
+  ftOpen = false;
+  $('#ft-arrow').classList.remove('open');
+  $('#ft-body').style.display = 'none';
+  $('#ft-body').innerHTML = '';
+  closeClaudeMdPanel();
+}
+
+async function openSessionFromOverview(s) {
+  if (!s || !s.projectName || !s.sessionId) return;
+  setProjectContext(s.projectName, s.projectType || 'personal', !!s.standalone);
+  await resumeSession(s.sessionId, s.codexSessionId || '', s.title || '');
+  loadSessionList();
 }
 
 function openSidebar() {
@@ -1548,7 +1875,7 @@ function renameSession(sessionId, menuEl) {
   const finish = async () => {
     input.onblur = null; input.onkeydown = null;
     const name = input.value.trim();
-    try { await authFetch(`/api/sessions/${sessionId}/name`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, project: state.currentProject }) }); } catch {}
+    try { await authFetch(`/api/sessions/${sessionId}/name`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, project: state.currentProject, type: state.currentProjectType }) }); } catch {}
     titleEl.textContent = name || oldText;
   };
   input.onblur = finish;
@@ -1558,7 +1885,7 @@ async function deleteSession(sessionId) {
   closeSessionMenu();
   if (!confirm('Delete this session? This cannot be undone.')) return;
   try {
-    await authFetch(`/api/sessions/${sessionId}/delete?project=${encodeURIComponent(state.currentProject)}`, { method: 'DELETE' });
+    await authFetch(`/api/sessions/${sessionId}/delete?project=${encodeURIComponent(state.currentProject)}&type=${encodeURIComponent(state.currentProjectType)}`, { method: 'DELETE' });
   } catch {}
   if (state.claudeSessionId === sessionId || state.codexSessionId === sessionId) {
     state.claudeSessionId = null;
@@ -1574,17 +1901,26 @@ async function deleteSession(sessionId) {
 async function loadProjects() {
   const res = await authFetch('/api/projects');
   const data = await res.json();
-  const projects = data.projects || data;
+  projectListCache = data.projects || data;
+  renderProjectList();
+}
 
+function renderProjectList() {
+  const projects = projectListCache.filter(p => {
+    const q = ($('#project-search-input')?.value || '').trim().toLowerCase();
+    if (!q) return true;
+    return [p.name, p.type, p.hasGit ? 'git' : '', p.hasClaudeMd ? 'claude' : ''].some(v => String(v || '').toLowerCase().includes(q));
+  });
   const el = $('#project-list');
   if (projects.length === 0) {
-    el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text2)">No projects yet. Create a folder in your workspace or request access to a shared project.</div>';
+    const q = ($('#project-search-input')?.value || '').trim();
+    el.innerHTML = `<div style="padding:40px;text-align:center;color:var(--text2)">${q ? '没有匹配的项目。' : 'No projects yet. Create a folder in your workspace or request access to a shared project.'}</div>`;
     return;
   }
   el.innerHTML = projects.map((p, i) => `
     <div class="project-card" data-idx="${i}" data-name="${esc(p.name)}" data-type="${p.type}"
       onclick="if(!sortMode) openProject('${esc(p.name)}', '${p.type}')">
-      <div class="name">${esc(p.name)} ${p.type === 'shared' ? '<span class="tag git" style="font-size:10px">Shared</span>' : ''}</div>
+      <div class="name"><svg class="project-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12a3 3 0 013 3v13H7a3 3 0 01-3-3V4z"/><path d="M8 8h6"/><path d="M8 12h8"/></svg><span class="project-title">${esc(p.name)}</span> ${p.type === 'shared' ? '<span class="tag git" style="font-size:10px">Shared</span>' : ''}</div>
       <div class="meta">
         ${p.hasGit ? '<span class="tag git">Git</span>' : ''}
         ${p.hasClaudeMd ? '<span class="tag claude">CLAUDE.md</span>' : ''}
@@ -1756,20 +2092,10 @@ async function doGitPush() {
 
 // ========== Sessions ==========
 async function openProject(name, type) {
-  state.currentProject = name;
-  state.currentProjectType = type || 'personal';
   state.activeId = null;
   state.claudeSessionId = null;
   state.codexSessionId = null;
-  $('#sidebar-project-name').textContent = name;
-  $('#sidebar-back-btn').style.display = '';
-  $('#sidebar-actions').style.display = '';
-  $('#sidebar-filetree').style.display = 'flex';
-  ftOpen = false;
-  $('#ft-arrow').classList.remove('open');
-  $('#ft-body').style.display = 'none';
-  $('#ft-body').innerHTML = '';
-  closeClaudeMdPanel();
+  setProjectContext(name, type || 'personal', false);
 
   // Try to resume most recent session instead of always creating new
   try {
@@ -1788,25 +2114,30 @@ async function openProject(name, type) {
   loadSessionList();
 }
 
-async function newChat() {
-  if (!state.currentProject) return;
+async function newChat(opts = {}) {
   closeSidebar();
+  const standalone = !!opts.standalone || !state.currentProject;
+  const payload = standalone
+    ? { standalone: true }
+    : { projectName: state.currentProject, type: state.currentProjectType };
   const res = await authFetch('/api/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectName: state.currentProject, type: state.currentProjectType })
+    body: JSON.stringify(payload)
   });
   const session = await res.json();
+  if (!res.ok) return;
+  setProjectContext(session.projectName || state.currentProject, session.projectType || state.currentProjectType, !!session.standalone);
   state.activeId = session.id;
   state.claudeSessionId = null;
   state.codexSessionId = null;
-  $('#chat-title').textContent = state.currentProject;
+  $('#chat-title').textContent = session.standalone ? 'New chat' : state.currentProject;
   $('#messages').innerHTML = `
     <div class="messages-inner">
       <div class="chat-empty-state" id="chat-empty">
         <div class="icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/><line x1="14" y1="4" x2="10" y2="20"/></svg></div>
         <div class="title">New conversation</div>
-        <div class="subtitle">Working in ${esc(state.currentProject)}</div>
+        <div class="subtitle">${session.standalone ? 'No project selected' : 'Working in ' + esc(state.currentProject)}</div>
       </div>
     </div>`;
   showPage('chat');
@@ -1814,7 +2145,11 @@ async function newChat() {
   $('#input').focus();
 }
 
-async function resumeSession(claudeSessionId, codexSessionId) {
+async function newStandaloneChat() {
+  await newChat({ standalone: true });
+}
+
+async function resumeSession(claudeSessionId, codexSessionId, title = '') {
   if (!state.currentProject) return;
   closeSidebar();
 
@@ -1828,16 +2163,17 @@ async function resumeSession(claudeSessionId, codexSessionId) {
   state.claudeSessionId = claudeSessionId;
   state.codexSessionId = session.codexSessionId || codexSessionId || null;
   const sessionRunning = session.running;
-  $('#chat-title').textContent = state.currentProject;
+  $('#chat-title').textContent = title || (state.currentProjectStandalone ? 'Chat' : state.currentProject);
 
   $('#messages').innerHTML = '<div class="messages-inner"><div class="loading">Loading history...</div></div>';
   showPage('chat');
   updateCompactBar();
 
   try {
+    const typeQuery = `&type=${encodeURIComponent(state.currentProjectType)}`;
     const [msgRes, rpRes] = await Promise.all([
-      authFetch(`/api/sessions/${claudeSessionId}/messages?project=${encodeURIComponent(state.currentProject)}`),
-      authFetch(`/api/sessions/${claudeSessionId}/rewind-points?project=${encodeURIComponent(state.currentProject)}`)
+      authFetch(`/api/sessions/${claudeSessionId}/messages?project=${encodeURIComponent(state.currentProject)}${typeQuery}`),
+      authFetch(`/api/sessions/${claudeSessionId}/rewind-points?project=${encodeURIComponent(state.currentProject)}${typeQuery}`)
     ]);
     const data = await msgRes.json();
     const messages = data.messages || [];
@@ -1892,7 +2228,7 @@ async function resumeSession(claudeSessionId, codexSessionId) {
     getMessagesInner().innerHTML = `<div class="chat-empty-state"><div class="icon">&#9888;</div><div class="title">Failed to load history</div><div class="subtitle">${esc(e.message)}</div></div>`;
   }
 
-  scrollToBottom();
+  scrollToBottom(true);
   $('#input').focus();
 
   // If Claude is still working, auto-connect to /wait for the result
@@ -1914,8 +2250,44 @@ function getMessagesInner() {
   return inner;
 }
 
-// ========== Image Paste ==========
+// ========== Chat Attachments ==========
 let pendingImages = [];
+let pendingFiles = [];
+let pendingAttachmentReads = 0;
+const MAX_ATTACHMENT_BYTES_UI = 25 * 1024 * 1024;
+const MAX_TOTAL_ATTACHMENT_BYTES_UI = 60 * 1024 * 1024;
+const MAX_ATTACHMENTS_UI = 10;
+
+function formatBytes(bytes) {
+  if (!bytes) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let n = bytes;
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return (i === 0 ? n : n.toFixed(n >= 10 ? 0 : 1)) + ' ' + units[i];
+}
+
+function totalPendingAttachmentBytes() {
+  return [...pendingImages, ...pendingFiles].reduce((sum, f) => sum + (f.size || 0), 0);
+}
+
+function totalPendingAttachmentCount() {
+  return pendingImages.length + pendingFiles.length;
+}
+
+function showComposerNotice(text, type = '') {
+  const el = $('#composer-notice');
+  if (!el) return;
+  if (!text) {
+    el.style.display = 'none';
+    el.textContent = '';
+    el.className = 'composer-notice';
+    return;
+  }
+  el.textContent = text;
+  el.className = `composer-notice ${type}`.trim();
+  el.style.display = 'block';
+}
 
 $('#input').addEventListener('paste', function(e) {
   const items = e.clipboardData?.items;
@@ -1924,12 +2296,20 @@ $('#input').addEventListener('paste', function(e) {
     if (item.type.startsWith('image/')) {
       e.preventDefault();
       const file = item.getAsFile();
+      if (!file || !canAttachFile(file)) continue;
+      pendingAttachmentReads++;
+      showComposerNotice('正在读取粘贴的图片...');
       const reader = new FileReader();
       reader.onload = () => {
+        pendingAttachmentReads = Math.max(0, pendingAttachmentReads - 1);
         const dataUrl = reader.result;
         const base64 = dataUrl.split(',')[1];
-        pendingImages.push({ data: base64, mimeType: item.type, dataUrl });
+        pendingImages.push({ data: base64, mimeType: item.type, dataUrl, name: file?.name || 'pasted-image.png', size: file?.size || 0 });
         renderImagePreviews();
+      };
+      reader.onerror = () => {
+        pendingAttachmentReads = Math.max(0, pendingAttachmentReads - 1);
+        showComposerNotice('粘贴图片读取失败，请重试。', 'error');
       };
       reader.readAsDataURL(file);
     }
@@ -1938,14 +2318,32 @@ $('#input').addEventListener('paste', function(e) {
 
 function renderImagePreviews() {
   const area = $('#image-previews');
-  if (pendingImages.length === 0) { area.style.display = 'none'; area.innerHTML = ''; return; }
+  if (pendingImages.length === 0 && pendingFiles.length === 0) {
+    area.style.display = 'none';
+    area.innerHTML = '';
+    if (pendingAttachmentReads === 0) showComposerNotice('');
+    return;
+  }
   area.style.display = 'flex';
-  area.innerHTML = pendingImages.map((img, i) => `
-    <div class="image-preview-item">
+  const imageHtml = pendingImages.map((img, i) => `
+    <div class="image-preview-item" title="${esc(img.name || 'image')}">
       <img src="${img.dataUrl}">
       <button class="remove" onclick="removeImage(${i})">&times;</button>
     </div>
   `).join('');
+  const fileHtml = pendingFiles.map((file, i) => `
+    <div class="file-preview-chip" title="${esc(file.name)}">
+      <span class="file-icon">&#128206;</span>
+      <span class="file-meta">
+        <div class="file-name">${esc(file.name)}</div>
+        <div class="file-size">${formatBytes(file.size)}</div>
+      </span>
+      <button class="remove" onclick="removeFile(${i})">&times;</button>
+    </div>
+  `).join('');
+  const clearHtml = `<button class="file-preview-chip" onclick="clearAttachments()" title="Clear attachments"><span class="file-icon">&times;</span><span class="file-meta"><div class="file-name">清空附件</div><div class="file-size">${totalPendingAttachmentCount()} items</div></span></button>`;
+  area.innerHTML = imageHtml + fileHtml + clearHtml;
+  showComposerNotice(`${totalPendingAttachmentCount()} 个附件，合计 ${formatBytes(totalPendingAttachmentBytes())}`, 'ok');
 }
 
 function removeImage(idx) {
@@ -1953,15 +2351,53 @@ function removeImage(idx) {
   renderImagePreviews();
 }
 
+function removeFile(idx) {
+  pendingFiles.splice(idx, 1);
+  renderImagePreviews();
+}
+
+function clearAttachments() {
+  pendingImages = [];
+  pendingFiles = [];
+  renderImagePreviews();
+}
+
+function canAttachFile(file) {
+  if (totalPendingAttachmentCount() >= MAX_ATTACHMENTS_UI) {
+    showComposerNotice(`单条消息最多上传 ${MAX_ATTACHMENTS_UI} 个附件。`, 'error');
+    return false;
+  }
+  if (file.size > MAX_ATTACHMENT_BYTES_UI) {
+    showComposerNotice(`${file.name} 超过 25 MB，无法上传。`, 'error');
+    return false;
+  }
+  if (totalPendingAttachmentBytes() + file.size > MAX_TOTAL_ATTACHMENT_BYTES_UI) {
+    showComposerNotice('本条消息附件总大小超过 60 MB，请删掉一些附件后再发送。', 'error');
+    return false;
+  }
+  return true;
+}
+
 function handleFileSelect(input) {
   for (const file of input.files) {
-    if (!file.type.startsWith('image/')) continue;
+    if (!canAttachFile(file)) continue;
+    pendingAttachmentReads++;
+    showComposerNotice(`正在读取 ${file.name}...`);
     const reader = new FileReader();
     reader.onload = () => {
+      pendingAttachmentReads = Math.max(0, pendingAttachmentReads - 1);
       const dataUrl = reader.result;
       const base64 = dataUrl.split(',')[1];
-      pendingImages.push({ data: base64, mimeType: file.type, dataUrl });
+      if (file.type.startsWith('image/')) {
+        pendingImages.push({ data: base64, mimeType: file.type, dataUrl, name: file.name, size: file.size });
+      } else {
+        pendingFiles.push({ data: base64, mimeType: file.type || 'application/octet-stream', name: file.name, size: file.size });
+      }
       renderImagePreviews();
+    };
+    reader.onerror = () => {
+      pendingAttachmentReads = Math.max(0, pendingAttachmentReads - 1);
+      showComposerNotice(`${file.name} 读取失败，请重试。`, 'error');
     };
     reader.readAsDataURL(file);
   }
@@ -2016,6 +2452,8 @@ function addMessage(role, content, isHistory, rewindInfo, imageDataUrls) {
 }
 
 function toolSummary(name, input) {
+  if (name === 'command' && input?.command) return `运行命令 ${String(input.command).substring(0, 80)}`;
+  if (name === 'file_edit' && input?.file) return `修改文件 ${basename(input.file)}`;
   if (name === 'Bash' && input?.command) return `$ ${input.command.substring(0, 60)}`;
   if (name === 'Read' && input?.file_path) return `Read ${basename(input.file_path)}`;
   if (name === 'Edit' && input?.file_path) return `Edit ${basename(input.file_path)}`;
@@ -2035,12 +2473,57 @@ function addToolUse(name, input) {
   scrollToBottom();
 }
 
-function scrollToBottom() {
+function addChatError(title, desc, retry = true) {
+  removeTypingBubble();
+  const inner = getMessagesInner();
+  const msg = document.createElement('div');
+  msg.className = 'msg ai';
+  msg.innerHTML = `
+    <div class="chat-error-card">
+      <div class="title">${esc(title || '这次回复失败')}</div>
+      <div class="desc">${esc(desc || '网络或模型服务暂时不可用。')}</div>
+      ${retry ? '<div class="actions"><button onclick="retryLastMessage()">重试</button></div>' : ''}
+    </div>`;
+  inner.appendChild(msg);
+  scrollToBottom(true);
+  return msg;
+}
+
+async function retryLastMessage() {
+  if (!lastFailedDraft || state.sending) return;
+  const draft = {
+    text: lastFailedDraft.text,
+    images: [...lastFailedDraft.images],
+    files: [...lastFailedDraft.files]
+  };
+  await sendMessage(draft);
+}
+
+function isNearBottom() {
   const el = $('#messages');
-  requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+  if (!el) return true;
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 140;
+}
+
+function updateScrollBottomButton() {
+  const btn = $('#scroll-bottom-btn');
+  const el = $('#messages');
+  if (!btn || !el) return;
+  btn.classList.toggle('visible', el.scrollHeight - el.scrollTop - el.clientHeight >= 180);
+}
+
+function scrollToBottom(force = false) {
+  const el = $('#messages');
+  if (!el) return;
+  const shouldScroll = force || isNearBottom();
+  requestAnimationFrame(() => {
+    if (shouldScroll) el.scrollTop = el.scrollHeight;
+    updateScrollBottomButton();
+  });
 }
 
 let lastSentText = '';
+let lastFailedDraft = null;
 let currentAbortController = null;
 let currentUserMsgEl = null;
 let waitAbortController = null;
@@ -2064,7 +2547,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 async function reconnectViaWait() {
-  if (!state.activeId) return;
+  if (!state.activeId) return false;
   updateTypingBubble('Reconnecting...');
   waitAbortController = new AbortController();
   try {
@@ -2097,14 +2580,17 @@ async function reconnectViaWait() {
       removeTypingBubble();
       setSendingUI(false);
       state.sending = false;
-      scrollToBottom();
+      scrollToBottom(true);
       loadSessionList();
+      lastFailedDraft = null;
+      return true;
     }
   } catch(e) {
-    if (e.name === 'AbortError') return; // will be retried by next visibilitychange
+    if (e.name === 'AbortError') return false; // will be retried by next visibilitychange
   } finally {
     waitAbortController = null;
   }
+  return false;
 }
 
 // ========== Compact ==========
@@ -2203,31 +2689,47 @@ async function stopGeneration() {
   $('#input').focus();
 }
 
-async function sendMessage() {
-  const text = $('#input').value.trim();
-  if ((!text && pendingImages.length === 0) || !state.activeId || state.sending) return;
+async function sendMessage(draft = null) {
+  if (pendingAttachmentReads > 0 && !draft) {
+    showComposerNotice('附件还在读取中，请稍等。', 'error');
+    return;
+  }
+  const text = draft ? (draft.text || '') : $('#input').value.trim();
+  if ((!text && pendingImages.length === 0 && pendingFiles.length === 0 && !draft) || !state.activeId || state.sending) return;
 
-  const imagesToSend = [...pendingImages];
+  const imagesToSend = draft ? [...(draft.images || [])] : [...pendingImages];
+  const filesToSend = draft ? [...(draft.files || [])] : [...pendingFiles];
   const imageDataUrls = imagesToSend.map(img => img.dataUrl);
-  pendingImages = [];
-  renderImagePreviews();
+  const fileNames = filesToSend.map(f => f.name);
+  if (!draft) {
+    pendingImages = [];
+    pendingFiles = [];
+    renderImagePreviews();
+  }
 
   lastSentText = text;
+  lastFailedDraft = { text, images: imagesToSend, files: filesToSend };
   state.sending = true;
-  $('#input').value = '';
-  $('#input').style.height = 'auto';
+  if (!draft) {
+    $('#input').value = '';
+    $('#input').style.height = 'auto';
+  }
   setSendingUI(true);
-  const userMsgEl = addMessage('user', text || '(image)', false, null, imageDataUrls);
+  const userDisplayText = text || (fileNames.length ? 'Attached file(s): ' + fileNames.join(', ') : '(image)');
+  const userMsgEl = addMessage('user', userDisplayText, false, null, imageDataUrls);
   currentUserMsgEl = userMsgEl;
   showTypingBubble();
-  scrollToBottom();
+  scrollToBottom(true);
 
-  const body = { message: text || 'Please look at the attached image(s).', backend: 'codex' };
+  const body = { message: text || (fileNames.length ? 'Please look at the attached file(s).' : 'Please look at the attached image(s).'), backend: 'codex' };
   if (appBackend === 'codex') {
     body.effort = $('#effort-select').value;
   }
   if (imagesToSend.length > 0) {
-    body.images = imagesToSend.map(img => ({ data: img.data, mimeType: img.mimeType }));
+    body.images = imagesToSend.map(img => ({ data: img.data, mimeType: img.mimeType, name: img.name, size: img.size }));
+  }
+  if (filesToSend.length > 0) {
+    body.files = filesToSend.map(file => ({ data: file.data, mimeType: file.mimeType, name: file.name, size: file.size }));
   }
 
   currentAbortController = new AbortController();
@@ -2239,6 +2741,14 @@ async function sendMessage() {
       body: JSON.stringify(body),
       signal: currentAbortController.signal
     });
+    if (!res.ok) {
+      let msg = `请求失败 (${res.status})`;
+      try {
+        const data = await res.json();
+        if (data.error) msg = data.error;
+      } catch {}
+      throw new Error(msg);
+    }
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -2289,22 +2799,26 @@ async function sendMessage() {
               processFileCards(aiBubble.querySelector('.bubble'));
             }
             lastSentText = ''; // completed successfully, don't restore
+            lastFailedDraft = null;
             currentUserMsgEl = null;
           }
           else if (evt.type === 'error') {
-            if (!aiBubble) aiBubble = addMessage('ai', '');
-            aiText += `\n⚠ ${evt.text}`;
-            aiBubble.querySelector('.bubble').innerHTML = formatContent(aiText, false);
-            aiBubble.dataset.rawContent = aiText;
+            addChatError('这次回复失败', evt.text || '模型返回了错误。');
           }
         } catch(e) {}
       }
     }
   } catch(e) {
     if (!state.sending || e.name === 'AbortError') return; // stopped by user or visibilitychange handler
-    // SSE stream broke — reconnect via /wait
-    await reconnectViaWait();
-    return; // reconnectViaWait handles cleanup
+    const recovered = await reconnectViaWait();
+    if (!recovered) {
+      addChatError('连接中断', e.message || '回复过程中连接断开。');
+      removeTypingBubble();
+      setSendingUI(false);
+      state.sending = false;
+      currentUserMsgEl = null;
+    }
+    return;
   } finally {
     currentAbortController = null;
   }
@@ -2319,7 +2833,7 @@ async function sendMessage() {
   if (state.claudeSessionId && userMsgEl.parentNode) {
     setTimeout(async () => {
       try {
-        const rpRes = await authFetch(`/api/sessions/${state.claudeSessionId}/rewind-points?project=${encodeURIComponent(state.currentProject)}`);
+        const rpRes = await authFetch(`/api/sessions/${state.claudeSessionId}/rewind-points?project=${encodeURIComponent(state.currentProject)}&type=${encodeURIComponent(state.currentProjectType)}`);
         const points = await rpRes.json();
         if (points.length > 0) {
           const latest = points[points.length - 1];
@@ -2370,7 +2884,7 @@ async function doRewind(rewindInfo, btn, msgEl, userText) {
     const res = await authFetch('/api/rewind', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ projectName: state.currentProject, sessionId: rewindInfo.sessionId, messageId: rewindInfo.messageId })
+      body: JSON.stringify({ projectName: state.currentProject, type: state.currentProjectType, sessionId: rewindInfo.sessionId, messageId: rewindInfo.messageId })
     });
     if (!res.ok) throw new Error('Rewind failed');
     document.querySelector('.rewind-confirm')?.remove();
@@ -2421,7 +2935,7 @@ async function loadOlderMessages() {
   const prevTop = firstMsg ? firstMsg.offsetTop : 0;
 
   try {
-    const res = await authFetch(`/api/sessions/${state.claudeSessionId}/messages?project=${encodeURIComponent(state.currentProject)}&before=${state.oldestLoadedIdx}`);
+    const res = await authFetch(`/api/sessions/${state.claudeSessionId}/messages?project=${encodeURIComponent(state.currentProject)}&type=${encodeURIComponent(state.currentProjectType)}&before=${state.oldestLoadedIdx}`);
     const data = await res.json();
     const messages = data.messages || [];
     state.hasMore = data.hasMore || false;
@@ -2506,28 +3020,45 @@ $('#messages').addEventListener('scroll', function() {
   if (this.scrollTop < 80 && state.hasMore && !state.loadingMore) {
     loadOlderMessages();
   }
+  updateScrollBottomButton();
 });
 
-// ========== Typing Bubble ==========
-function showTypingBubble() {
+// ========== Work Progress ==========
+let workProgressSteps = [];
+
+function renderWorkProgress(title = '正在思考') {
+  const steps = workProgressSteps.slice(-5).map(step => `
+    <div class="work-step"><span class="dot"></span><span class="label">${esc(step)}</span></div>
+  `).join('');
+  return `
+    <div class="work-progress">
+      <div class="work-title"><span class="dots"><span></span><span></span><span></span></span>${esc(title)}</div>
+      ${steps ? `<div class="work-steps">${steps}</div>` : ''}
+    </div>`;
+}
+
+function showTypingBubble(title = '正在思考') {
   removeTypingBubble();
+  workProgressSteps = [];
   const inner = getMessagesInner();
   const el = document.createElement('div');
   el.className = 'msg ai';
   el.id = 'typing-bubble-msg';
-  el.innerHTML = '<div class="typing-bubble"><span class="dots"><span></span><span></span><span></span></span> Agent is working</div>';
+  el.innerHTML = renderWorkProgress(title);
   inner.appendChild(el);
-  scrollToBottom();
+  scrollToBottom(true);
 }
 function updateTypingBubble(toolText) {
   let el = document.getElementById('typing-bubble-msg');
   if (!el) { showTypingBubble(); el = document.getElementById('typing-bubble-msg'); }
-  el.querySelector('.typing-bubble').innerHTML = `<span class="dots"><span></span><span></span><span></span></span> ${esc(toolText)}`;
+  if (toolText) workProgressSteps.push(toolText);
+  el.innerHTML = renderWorkProgress('正在处理');
   scrollToBottom();
 }
 function removeTypingBubble() {
   const el = document.getElementById('typing-bubble-msg');
   if (el) el.remove();
+  workProgressSteps = [];
 }
 
 // ========== CLAUDE.md Panel ==========

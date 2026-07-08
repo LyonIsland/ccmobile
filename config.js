@@ -63,6 +63,8 @@ const CLI_BACKEND = (process.env.CCMOBILE_CLI_BACKEND || 'claude').toLowerCase()
 module.exports = {
   // Server
   PORT: process.env.PORT || 6767,
+  HOST: process.env.CCMOBILE_HOST || process.env.HOST || '127.0.0.1',
+  TRUST_PROXY: (process.env.CCMOBILE_TRUST_PROXY || '').toLowerCase() === 'true',
 
   // Multi-user auth
   ADMIN_USER: process.env.CCMOBILE_ADMIN_USER || '',
