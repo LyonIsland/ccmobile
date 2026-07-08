@@ -287,7 +287,10 @@ html:not(.light) .conversation-fab { background: var(--surface3); }
   align-items: center; justify-content: center; transition: all .15s;
 }
 .chat-header .menu-btn:hover { background: var(--surface2); color: var(--text); }
-.chat-header h1 { font-size: 22px; font-weight: 700; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); letter-spacing: 0; }
+.chat-title-wrap { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.chat-header h1 { font-size: 22px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); letter-spacing: 0; line-height: 1.15; }
+.chat-subtitle { display: none; font-size: 12px; color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.25; }
+.chat-subtitle.visible { display: block; }
 .chat-icon-action {
   width: 38px; height: 38px; padding: 0; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
@@ -637,53 +640,6 @@ html:not(.light) .conversation-fab { background: var(--surface3); }
 .projects-grid.sort-mode .project-card { cursor: grab; }
 .projects-grid.sort-mode .project-card:active { cursor: grabbing; }
 
-/* Compact bar above input */
-.compact-bar {
-  display: flex; justify-content: center; padding: 0 24px;
-}
-.compact-bar-inner {
-  width: 100%; max-width: var(--chat-max-w);
-  display: flex; align-items: center; gap: 8px;
-}
-.btn-compact {
-  padding: 4px 12px; border: 1px solid var(--border); border-radius: 14px;
-  background: var(--surface); color: var(--text2); font-size: 12px;
-  cursor: pointer; transition: all .15s; display: flex; align-items: center; gap: 5px;
-  white-space: nowrap;
-}
-.btn-compact:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
-.btn-compact:disabled { opacity: .3; pointer-events: none; }
-.btn-compact svg { width: 14px; height: 14px; flex-shrink: 0; }
-
-/* Compact modal */
-.compact-modal-overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 1000;
-  display: flex; align-items: center; justify-content: center;
-  animation: fadeIn .15s ease;
-}
-.compact-modal {
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
-  width: 90%; max-width: 440px; padding: 20px; animation: fadeInUp .2s ease;
-}
-.compact-modal h3 { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
-.compact-modal .desc { font-size: 12px; color: var(--text2); margin-bottom: 14px; line-height: 1.5; }
-.compact-modal textarea {
-  width: 100%; min-height: 72px; padding: 10px 12px; border: 1px solid var(--border);
-  border-radius: var(--radius); background: var(--surface2); color: var(--text);
-  font-size: 13px; font-family: inherit; resize: vertical; outline: none; line-height: 1.45;
-}
-.compact-modal textarea:focus { border-color: var(--accent); }
-.compact-modal textarea::placeholder { color: var(--text3); }
-.compact-modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
-.compact-modal .actions button {
-  padding: 8px 18px; border-radius: var(--radius); font-size: 13px; font-weight: 500;
-  cursor: pointer; border: 1px solid var(--border); transition: all .15s;
-}
-.compact-modal .btn-cancel { background: var(--surface2); color: var(--text2); }
-.compact-modal .btn-cancel:hover { background: var(--surface3); }
-.compact-modal .btn-confirm { background: var(--accent); color: #fff; border-color: var(--accent); }
-.compact-modal .btn-confirm:hover { background: var(--accent-hover); }
-
 .msg .bubble .msg-images { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
 .msg .bubble .msg-images img { max-width: 200px; max-height: 160px; border-radius: 8px; cursor: pointer; }
 
@@ -773,7 +729,6 @@ html:not(.light) .conversation-fab { background: var(--surface3); }
   .messages { padding: 16px 12px 8px; }
   .scroll-bottom-btn { bottom: 86px; }
   .input-area { padding: 8px 12px; }
-  .compact-bar { padding: 0 12px; }
   .input-container { border-radius: 16px; }
   .chat-header { padding: 10px 12px; gap: 8px; }
   .chat-header .new-chat-label { display: none; }
@@ -1277,17 +1232,15 @@ html:not(.light) .conversation-fab { background: var(--surface3); }
       <div class="chat-header">
         <button class="back-btn" onclick="showPage('conversations')" title="Conversations"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="17" x2="20" y2="17"/></svg></button>
         <button class="menu-btn" onclick="showPage('conversations')" title="Conversations"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="17" x2="20" y2="17"/></svg></button>
-        <h1 id="chat-title">Chat</h1>
+        <div class="chat-title-wrap">
+          <h1 id="chat-title">Chat</h1>
+          <div class="chat-subtitle" id="chat-subtitle"></div>
+        </div>
         <button class="btn-action chat-icon-action" onclick="newChat()" title="New Chat"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>
         <button class="btn-action chat-icon-action" onclick="openGitModal()" title="More"><svg width="25" height="25" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
       </div>
       <div class="messages" id="messages"></div>
       <button class="scroll-bottom-btn" id="scroll-bottom-btn" onclick="scrollToBottom(true)" title="Scroll to bottom">&#8595;</button>
-      <div class="compact-bar" id="compact-bar" style="display:none">
-        <div class="compact-bar-inner">
-          <button class="btn-compact" id="btn-compact" onclick="openCompactModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>Compact</button>
-        </div>
-      </div>
       <div class="input-area">
         <div class="input-area-wrap">
           <div class="input-container">
@@ -1685,6 +1638,29 @@ function sessionTitle(s) {
   return s.customName || s.firstMessage || 'Untitled conversation';
 }
 
+function compactTitle(text) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!t) return '';
+  return t.length > 28 ? t.slice(0, 28) + '...' : t;
+}
+
+function updateChatTitle(conversationTitle = '') {
+  const summary = compactTitle(conversationTitle);
+  const title = state.currentProjectStandalone
+    ? (summary || '新对话')
+    : (state.currentProject || 'Chat');
+  $('#chat-title').textContent = title;
+  const subtitle = $('#chat-subtitle');
+  if (!subtitle) return;
+  if (!state.currentProjectStandalone && summary) {
+    subtitle.textContent = summary;
+    subtitle.classList.add('visible');
+  } else {
+    subtitle.textContent = '';
+    subtitle.classList.remove('visible');
+  }
+}
+
 function jsArg(value) {
   return JSON.stringify(value == null ? '' : String(value));
 }
@@ -1804,7 +1780,7 @@ function setProjectContext(name, type, standalone = false) {
 async function openSessionFromOverview(s) {
   if (!s || !s.projectName || !s.sessionId) return;
   setProjectContext(s.projectName, s.projectType || 'personal', !!s.standalone);
-  await resumeSession(s.sessionId, s.codexSessionId || '', s.title || '');
+  await resumeSession(s.sessionId, s.codexSessionId || '', s.title || sessionTitle(s));
   loadSessionList();
 }
 
@@ -1833,7 +1809,7 @@ async function loadSessionList() {
     const time = formatTime(s.lastTimestamp);
     const active = (s.sessionId === state.claudeSessionId || s.codexSessionId === state.codexSessionId) ? ' active' : '';
     return `
-      <div class="session-item${active}" data-sid="${s.sessionId}" data-codex-sid="${s.codexSessionId || ''}" onclick="resumeSession('${s.sessionId}', '${s.codexSessionId || ''}')">
+      <div class="session-item${active}" data-sid="${esc(s.sessionId)}" data-codex-sid="${esc(s.codexSessionId || '')}" onclick='resumeSession(${JSON.stringify(s.sessionId)}, ${JSON.stringify(s.codexSessionId || '')}, ${JSON.stringify(title)})'>
         <div class="title">${esc(title)}</div>
         <div class="info">
           <span>${time}</span>
@@ -2103,7 +2079,7 @@ async function openProject(name, type) {
     const sessions = await res.json();
     if (sessions.length > 0) {
       // Resume the most recent session (first in list, sorted by lastTimestamp desc)
-      await resumeSession(sessions[0].sessionId, sessions[0].codexSessionId || '');
+      await resumeSession(sessions[0].sessionId, sessions[0].codexSessionId || '', sessionTitle(sessions[0]));
       loadSessionList();
       return;
     }
@@ -2131,7 +2107,7 @@ async function newChat(opts = {}) {
   state.activeId = session.id;
   state.claudeSessionId = null;
   state.codexSessionId = null;
-  $('#chat-title').textContent = session.standalone ? 'New chat' : state.currentProject;
+  updateChatTitle();
   $('#messages').innerHTML = `
     <div class="messages-inner">
       <div class="chat-empty-state" id="chat-empty">
@@ -2141,7 +2117,6 @@ async function newChat(opts = {}) {
       </div>
     </div>`;
   showPage('chat');
-  updateCompactBar();
   $('#input').focus();
 }
 
@@ -2163,11 +2138,10 @@ async function resumeSession(claudeSessionId, codexSessionId, title = '') {
   state.claudeSessionId = claudeSessionId;
   state.codexSessionId = session.codexSessionId || codexSessionId || null;
   const sessionRunning = session.running;
-  $('#chat-title').textContent = title || (state.currentProjectStandalone ? 'Chat' : state.currentProject);
+  updateChatTitle(title);
 
   $('#messages').innerHTML = '<div class="messages-inner"><div class="loading">Loading history...</div></div>';
   showPage('chat');
-  updateCompactBar();
 
   try {
     const typeQuery = `&type=${encodeURIComponent(state.currentProjectType)}`;
@@ -2593,48 +2567,6 @@ async function reconnectViaWait() {
   return false;
 }
 
-// ========== Compact ==========
-function updateCompactBar() {
-  const bar = $('#compact-bar');
-  // Show compact button only when there's an active session with a claude session id (existing conversation)
-  bar.style.display = (state.activeId && state.claudeSessionId && !state.sending) ? '' : 'none';
-}
-
-function openCompactModal() {
-  if (state.sending || !state.activeId) return;
-  const overlay = document.createElement('div');
-  overlay.className = 'compact-modal-overlay';
-  overlay.id = 'compact-modal';
-  overlay.innerHTML = `
-    <div class="compact-modal">
-      <h3>Compact Conversation</h3>
-      <div class="desc">Summarize conversation history to free up context space. Optionally provide instructions for how the summary should be generated.</div>
-      <textarea id="compact-instruction" placeholder="e.g. Focus on the database changes and API endpoints we discussed..."></textarea>
-      <div class="actions">
-        <button class="btn-cancel" onclick="closeCompactModal()">Cancel</button>
-        <button class="btn-confirm" onclick="doCompact()">Compact</button>
-      </div>
-    </div>`;
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeCompactModal(); });
-  document.body.appendChild(overlay);
-  setTimeout(() => $('#compact-instruction')?.focus(), 50);
-}
-
-function closeCompactModal() {
-  const m = $('#compact-modal');
-  if (m) m.remove();
-}
-
-async function doCompact() {
-  const instruction = ($('#compact-instruction')?.value || '').trim();
-  closeCompactModal();
-  // Build the /compact command — same as typing it in Claude Code CLI
-  const compactCmd = instruction ? `/compact ${instruction}` : '/compact';
-  // Inject into input and send
-  $('#input').value = compactCmd;
-  await sendMessage();
-}
-
 function setSendingUI(active) {
   const btn = $('#btn-send');
   const input = $('#input');
@@ -2643,14 +2575,12 @@ function setSendingUI(active) {
     btn.classList.add('stopping');
     btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
     btn.onclick = stopGeneration;
-    updateCompactBar();
   } else {
     input.disabled = false;
     btn.classList.remove('stopping');
     btn.innerHTML = '&#9654;';
     btn.onclick = sendMessage;
     btn.disabled = false;
-    updateCompactBar();
   }
 }
 
@@ -2716,6 +2646,7 @@ async function sendMessage(draft = null) {
   }
   setSendingUI(true);
   const userDisplayText = text || (fileNames.length ? 'Attached file(s): ' + fileNames.join(', ') : '(image)');
+  updateChatTitle(userDisplayText);
   const userMsgEl = addMessage('user', userDisplayText, false, null, imageDataUrls);
   currentUserMsgEl = userMsgEl;
   showTypingBubble();
